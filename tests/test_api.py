@@ -55,6 +55,8 @@ def test_cors_preflight(client):
 def test_validation_error(client):
     _, res = client.post("/api/v1/calculate", json={"profile": PROFILE, "calculation": {"purchase_price": -1}})
     assert res.status == 422
+    assert res.json["errors"][0]["field"] == "calculation.purchase_price"
+    assert res.json["errors"][0]["message"]
 
 
 def test_full_flow(client):

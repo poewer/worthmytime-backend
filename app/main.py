@@ -89,7 +89,11 @@ def create_app(database_url: str | None = None, create_schema: bool = False) -> 
 
     @app.exception(SanicException)
     async def api_error(request: Request, exc: SanicException):
-        return json_response({"error": str(exc)}, status=exc.status_code)
+        body = {"error": str(exc)}
+        errors = getattr(exc, "errors", None)
+        if errors:  # 422: lista błędów per pole, np. {"field": "calculation.purchase_price", "message": "..."}
+            body["errors"] = errors
+        return json_response(body, status=exc.status_code)
 
     @app.exception(Exception)
     async def unexpected(request: Request, exc: Exception):
