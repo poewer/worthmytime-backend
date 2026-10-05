@@ -1,6 +1,7 @@
 import secrets
 
 from sanic import Blueprint, Request
+from sanic.response import empty
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -23,6 +24,12 @@ from .schemas import CalculateIn, CalculationIn, CompareIn, Credentials, Profile
 from .security import create_token, hash_password, verify_password
 
 bp = Blueprint("api", url_prefix="/api/v1")
+
+
+@bp.options("/<path:path>")
+async def preflight(request: Request, path: str):
+    # nagłówki CORS dokłada middleware on_response
+    return empty(204)
 
 
 @bp.get("/health")
