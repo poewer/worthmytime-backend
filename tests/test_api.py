@@ -1,12 +1,31 @@
+import asyncio
+import os
+
 import pytest
 from sanic_testing.reusable import ReusableClient
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.main import create_app
+from app.models import Base
+
+# Gdy ustawione (np. w CI): testy API idą na prawdziwym PostgreSQL zamiast SQLite.
+# UWAGA: schemat w tej bazie jest przed każdym testem kasowany (drop_all) - używaj tylko bazy testowej.
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+
+async def _reset_schema(url: str) -> None:
+    engine = create_async_engine(url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
 
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}")
+    url = TEST_DATABASE_URL or f"sqlite+aiosqlite:///{tmp_path / 'test.db'}"
+    if TEST_DATABASE_URL:
+        asyncio.run(_reset_schema(url))
+    app = create_app(url, create_schema=True)
     with ReusableClient(app) as c:
         yield c
 

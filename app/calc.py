@@ -7,7 +7,7 @@ Konwencje (zgodne z dokumentem MVP):
 
 from dataclasses import dataclass
 
-from .schemas import CalculationIn, CalcType, Frequency
+from .schemas import CalcType, CalculationIn, Frequency
 
 WEEKS_PER_MONTH = 4.2
 OCCURRENCES_PER_YEAR = {

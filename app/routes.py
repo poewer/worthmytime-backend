@@ -2,7 +2,7 @@ import secrets
 
 from sanic import Blueprint, Request
 from sanic.response import empty
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from . import calc
@@ -34,7 +34,11 @@ async def preflight(request: Request, path: str):
 
 @bp.get("/health")
 async def health(request: Request):
-    return ok({"status": "ok"})
+    try:
+        await request.ctx.db.execute(text("SELECT 1"))
+    except Exception:
+        return ok({"status": "unavailable", "database": "down"}, 503)
+    return ok({"status": "ok", "database": "up"})
 
 
 # ---------- auth ----------
