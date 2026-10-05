@@ -1,17 +1,20 @@
 """Czysty silnik obliczeń (bez I/O) - serce produktu.
 
-Konwencje (zgodne z dokumentem MVP):
-- miesiąc roboczy = hours_per_day * days_per_week * 4.2  (8h * 5d -> 168 h)
-- rok roboczy     = days_per_week * 4.2 * 12             (5d -> 252 dni)
+Konwencje (WorthMyTime_Budget_Model.md, sekcje 3, 5, 21):
+- godziny w miesiącu = hours_per_day * days_per_week * 52 / 12   (8h * 5d -> 173,33 h)
+- rok roboczy        = days_per_week * 52                        (5d -> 260 dni)
+- cykl DAILY         = 365,25 dnia w roku
 """
 
 from dataclasses import dataclass
 
 from .schemas import CalcType, CalculationIn, Frequency
 
-WEEKS_PER_MONTH = 4.2
+WEEKS_PER_YEAR = 52
+WEEKS_PER_MONTH = WEEKS_PER_YEAR / 12
+DAYS_PER_YEAR = 365.25
 OCCURRENCES_PER_YEAR = {
-    Frequency.DAILY: 365,
+    Frequency.DAILY: DAYS_PER_YEAR,
     Frequency.WEEKLY: 52,
     Frequency.MONTHLY: 12,
     Frequency.YEARLY: 1,
@@ -30,8 +33,13 @@ class WorkRate:
         return self.hours_per_day * self.days_per_week * WEEKS_PER_MONTH
 
     @property
+    def monthly_income(self) -> float:
+        """Efektywny miesięczny dochód netto (przy stawce podanej wprost: stawka * godziny w miesiącu)."""
+        return self.hourly_rate * self.hours_per_month
+
+    @property
     def working_days_per_year(self) -> float:
-        return self.days_per_week * WEEKS_PER_MONTH * 12
+        return self.days_per_week * WEEKS_PER_YEAR
 
 
 def resolve_rate(
@@ -82,8 +90,8 @@ def work_time(money: float, rate: WorkRate) -> dict:
 def _life_cost(total: float, years: float) -> dict:
     return {
         "years": years,
-        "per_day": round(total / (years * 365), 2),
-        "per_week": round(total / (years * 365 / 7), 2),
+        "per_day": round(total / (years * DAYS_PER_YEAR), 2),
+        "per_week": round(total / (years * DAYS_PER_YEAR / 7), 2),
         "per_month": round(total / (years * 12), 2),
     }
 

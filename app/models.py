@@ -52,6 +52,9 @@ class Calculation(Base):
     hourly_rate: Mapped[float] = mapped_column(Float)
     hours_per_day: Mapped[float] = mapped_column(Float, default=8.0)
     days_per_week: Mapped[float] = mapped_column(Float, default=5.0)
+    category: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    already_saved: Mapped[float] = mapped_column(Float, default=0.0)
+    monthly_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
     public_id: Mapped[str | None] = mapped_column(String(16), unique=True, index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -78,3 +81,20 @@ class Cost(Base):
     frequency: Mapped[str] = mapped_column(String(10))  # ONE_TIME|DAILY|WEEKLY|MONTHLY|YEARLY
 
     calculation: Mapped[Calculation] = relationship(back_populates="costs")
+
+
+class Budget(Base):
+    """Plan budżetu użytkownika: procenty kategorii i wydatki w bieżącym miesiącu."""
+
+    __tablename__ = "budgets"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    pct_needs: Mapped[float] = mapped_column(Float, default=50.0)
+    pct_future: Mapped[float] = mapped_column(Float, default=25.0)
+    pct_goals: Mapped[float] = mapped_column(Float, default=15.0)
+    pct_fun: Mapped[float] = mapped_column(Float, default=10.0)
+    spent_needs: Mapped[float] = mapped_column(Float, default=0.0)
+    spent_future: Mapped[float] = mapped_column(Float, default=0.0)
+    spent_goals: Mapped[float] = mapped_column(Float, default=0.0)
+    spent_fun: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)

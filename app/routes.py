@@ -6,21 +6,26 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from . import calc
+from .budget import analyze
 from .errors import ApiError
 from .helpers import (
     apply_input,
+    current_user,
+    load_plan,
     login_required,
     ok,
     parse,
+    plan_from_input,
     rate_from_calc,
     rate_from_user,
     resolve_rate_for_request,
+    serialize_budget,
     serialize_calc,
     to_input,
     user_profile,
 )
-from .models import Calculation, User
-from .schemas import CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
+from .models import Budget, Calculation, User
+from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
 from .security import create_token, hash_password, verify_password
 
 bp = Blueprint("api", url_prefix="/api/v1")
@@ -104,7 +109,16 @@ async def put_profile(request: Request):
 async def calculate(request: Request):
     data = parse(CalculateIn, request)
     rate, currency = await resolve_rate_for_request(request, data.profile)
-    return ok({"currency": currency, **calc.compute(data.calculation, rate)})
+    result = calc.compute(data.calculation, rate)
+    if data.calculation.category is not None:
+        user = await current_user(request) if data.budget is None else None
+        plan = (
+            plan_from_input(data.budget, rate.monthly_income)
+            if user is None
+            else await load_plan(request, user, rate.monthly_income)
+        )
+        result["budget"] = analyze(data.calculation, plan)
+    return ok({"currency": currency, **result})
 
 
 @bp.post("/compare")
@@ -125,12 +139,47 @@ async def compare(request: Request):
 
 
 async def _require_user(request: Request) -> User:
-    from .helpers import current_user
-
     user = await current_user(request)
     if user is None:
         raise ApiError("Wymagane uwierzytelnienie", 401)
     return user
+
+
+# ---------- budżet ----------
+
+
+async def _plan_for(request: Request, user: User):
+    """Plan budżetu użytkownika liczony od jego aktualnego dochodu (budżet jest "na żywo")."""
+    return await load_plan(request, user, rate_from_user(user).monthly_income)
+
+
+def _user_income(user: User) -> float | None:
+    if user.hourly_rate is None and user.monthly_income is None:
+        return None
+    return rate_from_user(user).monthly_income
+
+
+@bp.get("/budget")
+@login_required
+async def get_budget(request: Request):
+    user = request.ctx.user
+    return ok(serialize_budget(await request.ctx.db.get(Budget, user.id), _user_income(user)))
+
+
+@bp.put("/budget")
+@login_required
+async def put_budget(request: Request):
+    data = parse(BudgetIn, request)
+    user = request.ctx.user
+    row = await request.ctx.db.get(Budget, user.id)
+    if row is None:
+        row = Budget(user_id=user.id)
+        request.ctx.db.add(row)
+    for cat in CATEGORIES:
+        setattr(row, f"pct_{cat.value.lower()}", data.percentages[cat])
+        setattr(row, f"spent_{cat.value.lower()}", data.spent[cat])
+    await request.ctx.db.commit()
+    return ok(serialize_budget(row, _user_income(user)))
 
 
 # ---------- historia obliczeń ----------
@@ -160,7 +209,7 @@ async def save_calculation(request: Request):
     request.ctx.db.add(c)
     await request.ctx.db.commit()
     await request.ctx.db.refresh(c)
-    return ok(serialize_calc(c), 201)
+    return ok(serialize_calc(c, plan=await _plan_for(request, user)), 201)
 
 
 @bp.get("/calculations")
@@ -171,13 +220,16 @@ async def list_calculations(request: Request):
         .where(Calculation.user_id == request.ctx.user.id)
         .order_by(Calculation.created_at.desc())
     )
-    return ok({"items": [serialize_calc(c) for c in rows]})
+    plan = await _plan_for(request, request.ctx.user)
+    return ok({"items": [serialize_calc(c, plan=plan) for c in rows]})
 
 
 @bp.get("/calculations/<calc_id:str>")
 @login_required
 async def get_calculation(request: Request, calc_id: str):
-    return ok(serialize_calc(await _own_calc(request, request.ctx.user, calc_id)))
+    user = request.ctx.user
+    c = await _own_calc(request, user, calc_id)
+    return ok(serialize_calc(c, plan=await _plan_for(request, user)))
 
 
 @bp.put("/calculations/<calc_id:str>")
@@ -193,7 +245,7 @@ async def update_calculation(request: Request, calc_id: str):
     apply_input(c, data)
     await request.ctx.db.commit()
     await request.ctx.db.refresh(c)
-    return ok(serialize_calc(c))
+    return ok(serialize_calc(c, plan=await _plan_for(request, user)))
 
 
 @bp.delete("/calculations/<calc_id:str>")
@@ -222,7 +274,7 @@ async def duplicate_calculation(request: Request, calc_id: str):
     request.ctx.db.add(copy)
     await request.ctx.db.commit()
     await request.ctx.db.refresh(copy)
-    return ok(serialize_calc(copy), 201)
+    return ok(serialize_calc(copy, plan=await _plan_for(request, request.ctx.user)), 201)
 
 
 # ---------- udostępnianie ----------
@@ -268,6 +320,7 @@ async def dashboard(request: Request):
             .order_by(Calculation.created_at.desc())
         )
     )
+    plan = await _plan_for(request, request.ctx.user)
     items = [(c, calc.compute(to_input(c), rate_from_calc(c))) for c in rows]
     total_cost = sum(r["total_cost"] for _, r in items)
     total_hours = sum(r["work"]["hours"] for _, r in items)
@@ -299,6 +352,6 @@ async def dashboard(request: Request):
             ),
             "recurring": recurring,
             "recurring_yearly_total": round(sum(x["yearly_cost"] for x in recurring), 2),
-            "recent": [serialize_calc(c) for c, _ in items[:5]],
+            "recent": [serialize_calc(c, plan=plan) for c, _ in items[:5]],
         }
     )

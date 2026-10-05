@@ -17,6 +17,39 @@ class CalcType(str, Enum):
     TCO = "TCO"
 
 
+class Category(str, Enum):
+    """Koszyki budżetu (WorthMyTime_Budget_Model.md, sekcja 7)."""
+
+    NEEDS = "NEEDS"
+    FUTURE = "FUTURE"
+    GOALS = "GOALS"
+    FUN = "FUN"
+
+
+CATEGORIES = list(Category)
+DEFAULT_PERCENTAGES = {Category.NEEDS: 50.0, Category.FUTURE: 25.0, Category.GOALS: 15.0, Category.FUN: 10.0}
+
+
+class BudgetIn(BaseModel):
+    """Plan budżetu: procenty kategorii (suma 100) i wydatki w bieżącym miesiącu w każdej z nich."""
+
+    percentages: dict[Category, float] = Field(default_factory=lambda: dict(DEFAULT_PERCENTAGES))
+    spent: dict[Category, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check(self):
+        pct = {c: float(self.percentages.get(c, 0)) for c in CATEGORIES}
+        if any(v < 0 or v > 100 for v in pct.values()):
+            raise ValueError("Procent kategorii musi być w zakresie 0-100")
+        if abs(sum(pct.values()) - 100) > 0.01:
+            raise ValueError("Procenty kategorii muszą sumować się do 100")
+        spent = {c: float(self.spent.get(c, 0)) for c in CATEGORIES}
+        if any(v < 0 for v in spent.values()):
+            raise ValueError("Wydatki w kategorii nie mogą być ujemne")
+        self.percentages, self.spent = pct, spent
+        return self
+
+
 class Credentials(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
@@ -50,6 +83,10 @@ class CalculationIn(BaseModel):
     ownership_years: float | None = Field(default=None, gt=0, le=100)
     resale_value: float = Field(default=0, ge=0)
     costs: list[CostIn] = Field(default_factory=list, max_length=50)
+    # plan budżetowy (opcjonalnie): kategoria + cel oszczędnościowy
+    category: Category | None = None
+    already_saved: float = Field(default=0, ge=0)
+    monthly_contribution: float | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _check(self):
@@ -64,6 +101,7 @@ class CalculateIn(BaseModel):
     """Obliczenie bezstanowe; profil opcjonalny dla zalogowanych."""
 
     profile: ProfileIn | None = None
+    budget: BudgetIn | None = None
     calculation: CalculationIn
 
 
