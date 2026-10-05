@@ -6,9 +6,10 @@ from sanic import Request
 from sanic.response import json as json_response
 
 from . import calc
+from .budget import BudgetPlan, analyze
 from .errors import ApiError
-from .models import Calculation, Cost, User
-from .schemas import CalculationIn, CostIn, ProfileIn
+from .models import Budget, Calculation, Cost, User
+from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, ProfileIn
 from .security import decode_token
 
 M = TypeVar("M", bound=BaseModel)
@@ -101,6 +102,9 @@ def to_input(c: Calculation) -> CalculationIn:
         purchase_price=c.purchase_price,
         ownership_years=c.ownership_years,
         resale_value=c.resale_value,
+        category=c.category,
+        already_saved=c.already_saved,
+        monthly_contribution=c.monthly_contribution,
         costs=[CostIn(name=x.name, amount=x.amount, frequency=x.frequency) for x in c.costs],
     )
 
@@ -115,6 +119,9 @@ def apply_input(c: Calculation, data: CalculationIn) -> None:
     c.purchase_price = data.purchase_price
     c.ownership_years = data.ownership_years
     c.resale_value = data.resale_value
+    c.category = data.category.value if data.category else None
+    c.already_saved = data.already_saved
+    c.monthly_contribution = data.monthly_contribution
     c.costs = [
         Cost(position=i, name=x.name, amount=x.amount, frequency=x.frequency.value)
         for i, x in enumerate(data.costs)
@@ -128,8 +135,47 @@ def _strip_income_percent(result: dict) -> None:
         h["work"].pop("income_percent", None)
 
 
-def serialize_calc(c: Calculation, *, public: bool = False) -> dict:
+def plan_from_input(budget: BudgetIn | None, monthly_income: float) -> BudgetPlan:
+    """Budżet przesłany w żądaniu (użytkownik anonimowy) albo domyślny 50/25/15/10."""
+    if budget is None:
+        return BudgetPlan(monthly_income=monthly_income)
+    return BudgetPlan(
+        monthly_income=monthly_income, percentages=dict(budget.percentages), spent=dict(budget.spent), is_custom=True
+    )
+
+
+def plan_from_row(row: Budget | None, monthly_income: float) -> BudgetPlan:
+    if row is None:
+        return BudgetPlan(monthly_income=monthly_income)
+    return BudgetPlan(
+        monthly_income=monthly_income,
+        percentages={c: getattr(row, f"pct_{c.value.lower()}") for c in CATEGORIES},
+        spent={c: getattr(row, f"spent_{c.value.lower()}") for c in CATEGORIES},
+        is_custom=True,
+    )
+
+
+async def load_plan(request: Request, user: User, monthly_income: float) -> BudgetPlan:
+    return plan_from_row(await request.ctx.db.get(Budget, user.id), monthly_income)
+
+
+def serialize_budget(row: Budget | None, monthly_income: float | None) -> dict:
+    plan = plan_from_row(row, monthly_income or 0.0)
+    return {
+        "percentages": {c.value: plan.percentages[c] for c in CATEGORIES},
+        "spent": {c.value: plan.spent[c] for c in CATEGORIES},
+        "amounts": {c.value: plan.category_budget(c) for c in CATEGORIES} if monthly_income else None,
+        "available": {c.value: plan.available(c) for c in CATEGORIES} if monthly_income else None,
+        "monthly_income": round(monthly_income, 2) if monthly_income else None,
+        "total_spent": plan.total_spent,
+        "is_custom": row is not None,
+    }
+
+
+def serialize_calc(c: Calculation, *, public: bool = False, plan: BudgetPlan | None = None) -> dict:
     result = calc.compute(to_input(c), rate_from_calc(c))
+    if plan is not None and not public:
+        result["budget"] = analyze(to_input(c), plan)
     out = {
         "name": c.name,
         "type": c.type,

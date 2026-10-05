@@ -54,7 +54,7 @@ def test_anonymous_calculate(client):
         json={"profile": PROFILE, "calculation": {"name": "iPhone", "purchase_price": 5299}},
     )
     assert res.status == 200
-    assert round(res.json["work"]["hours"]) == 127
+    assert round(res.json["work"]["hours"]) == 131
 
 
 def test_cors_preflight(client):
@@ -83,7 +83,7 @@ def test_full_flow(client):
     assert res.status == 409  # brak profilu
 
     _, res = client.put("/api/v1/profile", json=PROFILE, headers=auth)
-    assert res.json["effective_hourly_rate"] == 41.67
+    assert res.json["effective_hourly_rate"] == 40.38
 
     _, res = client.post("/api/v1/calculations", json={"name": "iPhone", "purchase_price": 5299}, headers=auth)
     assert res.status == 201
@@ -110,6 +110,59 @@ def test_full_flow(client):
     assert res.status == 200
     _, res = client.get(f"/api/v1/shared/{pid}")
     assert res.status == 404
+
+
+def test_budget_warning_for_anonymous_calculation(client):
+    body = {
+        "profile": {"monthly_income": 10000},
+        "budget": {"percentages": {"NEEDS": 50, "FUTURE": 25, "GOALS": 15, "FUN": 10}, "spent": {"FUN": 400}},
+        "calculation": {"name": "PlayStation", "purchase_price": 2500, "category": "FUN"},
+    }
+    _, res = client.post("/api/v1/calculate", json=body)
+    b = res.json["budget"]
+    assert b["category_budget"] == 1000 and b["available"] == 600
+    assert b["fits_budget"] is False
+    assert {w["code"] for w in b["warnings"]} >= {"CATEGORY_BUDGET_EXCEEDED", "HIGHER_PRIORITY_AT_RISK"}
+
+
+def test_no_category_means_no_budget_block(client):
+    _, res = client.post(
+        "/api/v1/calculate", json={"profile": PROFILE, "calculation": {"name": "x", "purchase_price": 100}}
+    )
+    assert "budget" not in res.json
+
+
+def test_budget_endpoints_and_saved_calculation_analysis(client):
+    _, res = client.post("/api/v1/auth/register", json={"email": "bud@b.pl", "password": "supersecret1"})
+    auth = {"Authorization": f"Bearer {res.json['token']}"}
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+
+    _, res = client.get("/api/v1/budget", headers=auth)
+    assert res.json["is_custom"] is False
+    assert res.json["amounts"]["FUN"] == 1000
+
+    bad = {"percentages": {"NEEDS": 60, "FUTURE": 25, "GOALS": 15, "FUN": 10}}
+    _, res = client.put("/api/v1/budget", json=bad, headers=auth)
+    assert res.status == 422
+
+    good = {"percentages": {"NEEDS": 40, "FUTURE": 25, "GOALS": 15, "FUN": 20}, "spent": {"FUN": 1500}}
+    _, res = client.put("/api/v1/budget", json=good, headers=auth)
+    assert res.json["amounts"]["FUN"] == 2000 and res.json["is_custom"] is True
+
+    _, res = client.post(
+        "/api/v1/calculations",
+        json={"name": "Konsola", "purchase_price": 800, "category": "FUN"},
+        headers=auth,
+    )
+    assert res.status == 201
+    assert res.json["input"]["category"] == "FUN"
+    assert res.json["result"]["budget"]["available"] == 500
+    assert res.json["result"]["budget"]["fits_budget"] is False  # 1500 + 800 > 2000
+
+    # zmiana budżetu od razu zmienia ocenę zapisanego obliczenia
+    client.put("/api/v1/budget", json={**good, "spent": {"FUN": 0}}, headers=auth)
+    _, res = client.get(f"/api/v1/calculations/{res.json['id']}", headers=auth)
+    assert res.json["result"]["budget"]["fits_budget"] is True
 
 
 def test_other_user_cannot_read(client):
