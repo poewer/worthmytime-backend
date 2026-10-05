@@ -136,16 +136,18 @@ def _compute_recurring(calc: CalculationIn, rate: WorkRate) -> dict:
     for label, years in RECURRING_HORIZONS:
         cost = round(per_year * years + one_time, 2)
         horizons.append({"label": label, "years": round(years, 4), "cost": cost, "work": work_time(cost, rate)})
-    ten = horizons[-1]
+    month, ten = horizons[0], horizons[-1]
+    # nagłówek wyniku = koszt jednego miesiąca (skala zrozumiała dla użytkownika);
+    # dłuższe horyzonty (rok, 5 i 10 lat) pokazują, jak to narasta
     return {
         "name": calc.name,
         "type": calc.type.value,
-        "total_cost": ten["cost"],
+        "total_cost": month["cost"],
         "breakdown": [
             {"name": c.name, "amount": c.amount, "frequency": c.frequency.value} for c in calc.costs
         ],
         "hourly_rate": round(rate.hourly_rate, 2),
-        "work": ten["work"],
+        "work": month["work"],
         "horizons": horizons,
         "summary": {"years": 10, "working_days": ten["work"]["working_days"]},
         "life_cost": None,

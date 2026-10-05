@@ -57,6 +57,10 @@ def test_recurring():
     assert by_label["1 year"]["cost"] == 588
     assert (by_label["1 year"]["work"]["hours_part"], by_label["1 year"]["work"]["minutes_part"]) == (14, 7)
     assert by_label["10 years"]["work"]["working_days"] == 17.64
+    # nagłówek wyniku to koszt miesiąca, a nie 10 lat
+    assert r["total_cost"] == 49
+    assert r["work"]["income_percent"] == 0.7
+    assert by_label["10 years"]["work"]["income_percent"] == 84.0
 
 
 def test_income_percent_matches_months_and_hourly_rate_input():
