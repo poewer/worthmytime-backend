@@ -121,6 +121,13 @@ def apply_input(c: Calculation, data: CalculationIn) -> None:
     ]
 
 
+def _strip_income_percent(result: dict) -> None:
+    """Procent wypłaty razem z ceną pozwoliłby odtworzyć dochód - nie pokazujemy go publicznie."""
+    result["work"].pop("income_percent", None)
+    for h in result.get("horizons", []):
+        h["work"].pop("income_percent", None)
+
+
 def serialize_calc(c: Calculation, *, public: bool = False) -> dict:
     result = calc.compute(to_input(c), rate_from_calc(c))
     out = {
@@ -134,6 +141,7 @@ def serialize_calc(c: Calculation, *, public: bool = False) -> dict:
     if public:
         # Strona publiczna nie ujawnia stawki ani zapisanego profilu.
         out["result"].pop("hourly_rate", None)
+        _strip_income_percent(out["result"])
         out.pop("input")
         out["input"] = {"name": c.name, "type": c.type}
         return out

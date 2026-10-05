@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, inspect
 
 from app.main import create_app
 from app.models import Base
+from tests.test_api import _free_port
 
 
 def _alembic(url: str) -> Config:
@@ -40,6 +41,6 @@ def test_models_match_migrations(tmp_path):
 def test_app_runs_on_migrated_db(tmp_path):
     url = f"sqlite+aiosqlite:///{tmp_path / 'a.db'}"
     command.upgrade(_alembic(url), "head")
-    with ReusableClient(create_app(url)) as client:  # bez create_schema
+    with ReusableClient(create_app(url), port=_free_port()) as client:  # bez create_schema
         _, res = client.get("/api/v1/health")
         assert res.status == 200
