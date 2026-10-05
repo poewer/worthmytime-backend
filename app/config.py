@@ -9,8 +9,9 @@ class Settings(BaseSettings):
     jwt_ttl_hours: int = 24 * 7
     cors_origins: str = "*"
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8001
     debug: bool = False
+    log_level: str = "INFO"
 
 
 settings = Settings()
