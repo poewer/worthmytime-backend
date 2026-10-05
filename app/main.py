@@ -1,7 +1,8 @@
 from sanic import Request, Sanic
 from sanic.exceptions import SanicException
-from sanic.response import HTTPResponse, json as json_response
-from sqlalchemy import text
+from sanic.response import HTTPResponse
+from sanic.response import json as json_response
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -13,11 +14,24 @@ from .routes import bp
 log = setup_logging()
 
 
-def create_app(database_url: str | None = None) -> Sanic:
-    log.info("Start aplikacji (poziom logów: %s, CORS: %s)", settings.log_level.upper(), settings.cors_origins)
+def create_app(database_url: str | None = None, create_schema: bool = False) -> Sanic:
+    log.info(
+        "Start aplikacji (tryb: %s, poziom logów: %s, CORS: %s)",
+        "DEBUG" if settings.debug else "PRODUKCJA",
+        settings.log_level.upper(),
+        settings.cors_origins,
+    )
+    if not settings.debug:
+        problems = settings.production_problems()
+        if problems:
+            for p in problems:
+                log.error("Konfiguracja: %s", p)
+            raise RuntimeError("Niepoprawna konfiguracja produkcyjna: " + "; ".join(problems))
+        if "*" in settings.cors_origin_list:
+            log.warning("CORS_ORIGINS=* na produkcji - ustaw listę domen frontendu")
     app = Sanic("worthmytime", configure_logging=True)
     app.config.FALLBACK_ERROR_FORMAT = "json"
-    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    origins = settings.cors_origin_list
 
     @app.before_server_start
     async def setup_db(app):
@@ -29,7 +43,15 @@ def create_app(database_url: str | None = None) -> Sanic:
             async with engine.begin() as conn:
                 await conn.execute(text("SELECT 1"))
                 log.info("Połączono z bazą danych (%s)", url.get_backend_name())
-                await conn.run_sync(Base.metadata.create_all)
+                if create_schema:  # tylko testy; produkcyjnie schemat zarządzany jest przez Alembic
+                    await conn.run_sync(Base.metadata.create_all)
+                missing = await conn.run_sync(
+                    lambda c: [t for t in Base.metadata.tables if not inspect(c).has_table(t)]
+                )
+                if missing:
+                    raise RuntimeError(
+                        f"Brak tabel w bazie: {', '.join(missing)}. Uruchom migracje: alembic upgrade head"
+                    )
                 log.info("Schemat bazy gotowy (tabele: %s)", ", ".join(sorted(Base.metadata.tables)))
         except Exception:
             log.exception("Nie udało się połączyć z bazą danych: %s", safe_url)

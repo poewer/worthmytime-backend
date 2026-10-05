@@ -12,18 +12,28 @@ dependencies = [
     "aiosqlite>=0.20",
     "pyjwt>=2.8",
     "argon2-cffi>=23.1",
+    "alembic>=1.20.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    "ruff>=0.16.10",
     "sanic-testing>=24.6",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["UP042"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
