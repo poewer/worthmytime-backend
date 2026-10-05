@@ -22,7 +22,12 @@ uv run alembic upgrade head
 uv run alembic downgrade -1
 ```
 
-Baza utworzona wcześniej przez `create_all` (bez tabeli `alembic_version`): `uv run alembic stamp head`.
+Baza utworzona wcześniej przez `create_all` (bez tabeli `alembic_version`): najpierw oznacz ją rewizją odpowiadającą jej schematowi, a potem zastosuj nowsze migracje. Baza sprzed `0002` (bez tabeli `budgets`):
+
+```powershell
+uv run alembic stamp 0001
+uv run alembic upgrade head
+```
 
 Kontener wykonuje `alembic upgrade head` przy każdym starcie.
 
