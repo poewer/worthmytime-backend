@@ -25,7 +25,7 @@ def parse(model: type[M], request: Request) -> M:
             {"field": ".".join(str(p) for p in err["loc"]), "message": err["msg"]}
             for err in e.errors(include_url=False, include_context=False)
         ]
-        raise ApiError(f"Błąd walidacji: {errors}", 422) from e
+        raise ApiError("Błąd walidacji danych", 422, errors) from e
 
 
 def ok(data, status: int = 200):
