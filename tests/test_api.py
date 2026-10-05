@@ -23,6 +23,16 @@ def test_anonymous_calculate(client):
     assert round(res.json["work"]["hours"]) == 127
 
 
+def test_cors_preflight(client):
+    _, res = client.options(
+        "/api/v1/calculate",
+        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "POST"},
+    )
+    assert res.status == 204
+    assert res.headers["access-control-allow-origin"] == "*"
+    assert "POST" in res.headers["access-control-allow-methods"]
+
+
 def test_validation_error(client):
     _, res = client.post("/api/v1/calculate", json={"profile": PROFILE, "calculation": {"purchase_price": -1}})
     assert res.status == 422
