@@ -16,6 +16,8 @@ def test_simple_purchase():
     assert round(r["work"]["hours"]) == 127
     assert r["work"]["working_days"] == 15.9
     assert r["work"]["working_weeks"] == 3.18
+    assert r["work"]["working_months"] == 0.76
+    assert r["work"]["income_percent"] == 75.7
     assert r["life_cost"]["per_day"] == 4.84
     assert round(r["life_cost"]["per_month"]) == 147
 
@@ -55,6 +57,13 @@ def test_recurring():
     assert by_label["1 year"]["cost"] == 588
     assert (by_label["1 year"]["work"]["hours_part"], by_label["1 year"]["work"]["minutes_part"]) == (14, 7)
     assert by_label["10 years"]["work"]["working_days"] == 17.64
+
+
+def test_income_percent_matches_months_and_hourly_rate_input():
+    # stawka podana wprost: miesięczny odpowiednik = stawka * 168 h
+    r = compute(CalculationIn(name="x", purchase_price=4200), resolve_rate(None, 25))
+    assert r["work"]["working_months"] == 1.0
+    assert r["work"]["income_percent"] == 100.0
 
 
 def test_resale_reduces_total():

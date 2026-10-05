@@ -1,5 +1,7 @@
 import asyncio
 import os
+import random
+import socket
 
 import pytest
 from sanic_testing.reusable import ReusableClient
@@ -11,6 +13,19 @@ from app.models import Base
 # Gdy ustawione (np. w CI): testy API idą na prawdziwym PostgreSQL zamiast SQLite.
 # UWAGA: schemat w tej bazie jest przed każdym testem kasowany (drop_all) - używaj tylko bazy testowej.
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+
+def _free_port() -> int:
+    """Wolny port spoza zakresu ephemeral (na Windows jego część jest zarezerwowana - błąd 10013)."""
+    for _ in range(50):
+        port = random.randint(30000, 39999)
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError("Brak wolnego portu do testów")
 
 
 async def _reset_schema(url: str) -> None:
@@ -26,7 +41,7 @@ def client(tmp_path):
     if TEST_DATABASE_URL:
         asyncio.run(_reset_schema(url))
     app = create_app(url, create_schema=True)
-    with ReusableClient(app) as c:
+    with ReusableClient(app, port=_free_port()) as c:
         yield c
 
 
@@ -79,6 +94,7 @@ def test_full_flow(client):
     _, res = client.get(f"/api/v1/shared/{pid}")
     assert res.status == 200
     assert "hourly_rate" not in res.json["result"]
+    assert "income_percent" not in res.json["result"]["work"]
     assert "id" not in res.json
 
     _, res = client.post(f"/api/v1/calculations/{cid}/duplicate", headers=auth)

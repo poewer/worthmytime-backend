@@ -62,6 +62,7 @@ def work_time(money: float, rate: WorkRate) -> dict:
     days = hours / rate.hours_per_day
     weeks = days / rate.days_per_week
     years = days / rate.working_days_per_year
+    months = hours / rate.hours_per_month
     total_minutes = round(hours * 60)
     sign = -1 if total_minutes < 0 else 1
     h, m = divmod(abs(total_minutes), 60)
@@ -71,7 +72,10 @@ def work_time(money: float, rate: WorkRate) -> dict:
         "minutes_part": m,
         "working_days": round(days, 2),
         "working_weeks": round(weeks, 2),
+        "working_months": round(months, 2),
         "working_years": round(years, 2),
+        # jaką część miesięcznej wypłaty pochłania wydatek (100 = cała wypłata)
+        "income_percent": round(months * 100, 1),
     }
 
 
