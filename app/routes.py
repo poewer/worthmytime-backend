@@ -11,6 +11,7 @@ from .errors import ApiError
 from .helpers import (
     apply_input,
     current_user,
+    load_ledger,
     load_loans,
     load_plan,
     login_required,
@@ -23,9 +24,11 @@ from .helpers import (
     serialize_budget,
     serialize_calc,
     to_input,
+    today,
     user_profile,
 )
 from .models import Budget, BudgetLoan, Calculation, User
+from .planning import period_of
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
 from .security import create_token, hash_password, verify_password
 
@@ -99,6 +102,9 @@ async def put_profile(request: Request):
     user.hourly_rate = data.hourly_rate
     user.hours_per_day = data.hours_per_day
     user.days_per_week = data.days_per_week
+    user.commute_minutes_per_day = data.commute_minutes_per_day
+    user.work_costs_monthly = data.work_costs_monthly
+    user.rate_mode = data.rate_mode
     await request.ctx.db.commit()
     return ok(user_profile(user))
 
@@ -171,9 +177,15 @@ def _user_income(user: User) -> float | None:
 async def get_budget(request: Request):
     user = request.ctx.user
     income = _user_income(user)
+    period = period_of(today())
     return ok(
         serialize_budget(
-            await request.ctx.db.get(Budget, user.id), income, await load_loans(request, user), _user_rate(user)
+            await request.ctx.db.get(Budget, user.id),
+            income,
+            await load_loans(request, user),
+            _user_rate(user),
+            await load_ledger(request, user, period),
+            period,
         )
     )
 
@@ -190,6 +202,8 @@ async def put_budget(request: Request):
     for cat in CATEGORIES:
         setattr(row, f"pct_{cat.value.lower()}", data.percentages[cat])
         setattr(row, f"spent_{cat.value.lower()}", data.spent[cat])
+    period = period_of(today())
+    row.spent_period = period  # ręczne kwoty dotyczą bieżącego miesiąca
     # lista kredytów jest zastępowana w całości (jak w formularzu: zapis całego planu)
     db = request.ctx.db
     for old in await load_loans(request, user):
@@ -207,7 +221,11 @@ async def put_budget(request: Request):
     ]
     db.add_all(loans)
     await db.commit()
-    return ok(serialize_budget(row, _user_income(user), loans, _user_rate(user)))
+    return ok(
+        serialize_budget(
+            row, _user_income(user), loans, _user_rate(user), await load_ledger(request, user, period), period
+        )
+    )
 
 
 # ---------- historia obliczeń ----------
@@ -230,6 +248,7 @@ async def save_calculation(request: Request):
         user_id=user.id,
         currency=user.currency,
         hourly_rate=rate.hourly_rate,
+        net_income=rate.monthly_income,
         hours_per_day=rate.hours_per_day,
         days_per_week=rate.days_per_week,
     )
@@ -268,7 +287,7 @@ async def update_calculation(request: Request, calc_id: str):
     c = await _own_calc(request, user, calc_id)
     # edycja przelicza wynik według aktualnego profilu
     rate = rate_from_user(user)
-    c.currency, c.hourly_rate = user.currency, rate.hourly_rate
+    c.currency, c.hourly_rate, c.net_income = user.currency, rate.hourly_rate, rate.monthly_income
     c.hours_per_day, c.days_per_week = rate.hours_per_day, rate.days_per_week
     apply_input(c, data)
     await request.ctx.db.commit()
@@ -293,6 +312,7 @@ async def duplicate_calculation(request: Request, calc_id: str):
         user_id=src.user_id,
         currency=src.currency,
         hourly_rate=src.hourly_rate,
+        net_income=src.net_income,
         hours_per_day=src.hours_per_day,
         days_per_week=src.days_per_week,
     )

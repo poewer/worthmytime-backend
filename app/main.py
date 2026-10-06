@@ -10,6 +10,7 @@ from .config import settings
 from .logging_config import setup_logging
 from .models import Base
 from .routes import bp
+from .routes_planning import bp as planning_bp
 
 log = setup_logging()
 
@@ -101,6 +102,7 @@ def create_app(database_url: str | None = None, create_schema: bool = False) -> 
         return json_response({"error": "Wewnętrzny błąd serwera"}, status=500)
 
     app.blueprint(bp)
+    app.blueprint(planning_bp)
     return app
 
 

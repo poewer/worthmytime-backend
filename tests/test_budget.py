@@ -178,6 +178,24 @@ def test_no_obligations_block_without_loans():
     assert analyze(calc(10), plan())["obligations"] is None
 
 
+def test_manual_spent_expires_after_month_change():
+    from app.helpers import manual_spent, plan_from_row
+    from app.models import Budget
+
+    row = Budget(
+        user_id="u", spent_fun=300.0, spent_needs=0.0, spent_future=0.0, spent_goals=0.0, spent_period="2026-09"
+    )
+    row.pct_needs, row.pct_future, row.pct_goals, row.pct_fun = 50.0, 25.0, 15.0, 10.0
+    assert manual_spent(row, "2026-09")[Category.FUN] == 300.0
+    assert manual_spent(row, "2026-10")[Category.FUN] == 0.0  # nowy miesiąc: ręczna kwota wygasa
+    assert manual_spent(row, None)[Category.FUN] == 300.0
+    row.spent_period = None  # stare wiersze sprzed rejestru nie tracą kwot
+    assert manual_spent(row, "2026-10")[Category.FUN] == 300.0
+
+    p = plan_from_row(row, 10000.0, ledger={"FUN": 150.0}, period="2026-10")
+    assert p.spent[Category.FUN] == 450.0  # 300 ręcznie (okres null) + 150 z rejestru
+
+
 def test_loan_view_derived_values():
     v = loan_view("Kredyt", 800, 36, 40000, plan(), hourly_rate=50)
     assert v["remaining_to_pay"] == 28800

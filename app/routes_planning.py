@@ -1,0 +1,307 @@
+"""Endpointy planowania: rejestr wydatków, lista życzeń i cele oszczędnościowe (wymagają konta)."""
+
+from datetime import UTC, datetime
+
+from sanic import Blueprint, Request
+from sqlalchemy import select
+
+from . import calc
+from .errors import ApiError
+from .helpers import login_required, ok, parse, rate_from_user, today
+from .models import Expense, SavingsGoal, User, WishlistItem
+from .planning import (
+    goal_view,
+    last_periods,
+    month_bounds,
+    monthly_summary,
+    parse_period,
+    period_of,
+    totals_by_category,
+    wish_stats,
+    wish_view,
+)
+from .schemas import DecisionIn, DepositIn, ExpenseIn, GoalIn, WishIn
+
+bp = Blueprint("planning", url_prefix="/api/v1")
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _aware(dt: datetime) -> datetime:
+    """SQLite zwraca daty bez strefy - traktujemy je jako UTC."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+async def _own(request: Request, model, item_id: str, user: User, what: str):
+    row = await request.ctx.db.get(model, item_id)
+    if row is None or row.user_id != user.id:
+        raise ApiError(f"Nie znaleziono: {what}", 404)
+    return row
+
+
+# ---------- rejestr wydatków ----------
+
+
+def _expense(e: Expense) -> dict:
+    return {
+        "id": e.id,
+        "category": e.category,
+        "amount": e.amount,
+        "note": e.note,
+        "spent_on": e.spent_on.isoformat(),
+    }
+
+
+def _period_arg(request: Request) -> str:
+    period = request.args.get("month") or period_of(today())
+    try:
+        parse_period(period)
+    except ValueError:
+        raise ApiError("Parametr month ma format YYYY-MM", 422)
+    return period
+
+
+@bp.get("/expenses")
+@login_required
+async def list_expenses(request: Request):
+    period = _period_arg(request)
+    start, end = month_bounds(period)
+    rows = list(
+        await request.ctx.db.scalars(
+            select(Expense)
+            .where(Expense.user_id == request.ctx.user.id, Expense.spent_on >= start, Expense.spent_on < end)
+            .order_by(Expense.spent_on.desc(), Expense.created_at.desc())
+        )
+    )
+    totals = totals_by_category((e.category, e.amount) for e in rows)
+    return ok(
+        {
+            "month": period,
+            "items": [_expense(e) for e in rows],
+            "totals": totals,
+            "total": round(sum(totals.values()), 2),
+        }
+    )
+
+
+@bp.post("/expenses")
+@login_required
+async def add_expense(request: Request):
+    data = parse(ExpenseIn, request)
+    e = Expense(
+        user_id=request.ctx.user.id,
+        category=data.category.value,
+        amount=data.amount,
+        note=data.note,
+        spent_on=data.spent_on or today(),
+    )
+    request.ctx.db.add(e)
+    await request.ctx.db.commit()
+    return ok(_expense(e), 201)
+
+
+@bp.delete("/expenses/<expense_id:str>")
+@login_required
+async def delete_expense(request: Request, expense_id: str):
+    e = await _own(request, Expense, expense_id, request.ctx.user, "wydatku")
+    await request.ctx.db.delete(e)
+    await request.ctx.db.commit()
+    return ok({"deleted": True})
+
+
+@bp.get("/expenses/summary")
+@login_required
+async def expenses_summary(request: Request):
+    try:
+        months = max(1, min(24, int(request.args.get("months", 6))))
+    except ValueError:
+        raise ApiError("Parametr months musi być liczbą", 422)
+    periods = last_periods(today(), months)
+    start, _ = month_bounds(periods[0])
+    rows = await request.ctx.db.execute(
+        select(Expense.spent_on, Expense.category, Expense.amount).where(
+            Expense.user_id == request.ctx.user.id, Expense.spent_on >= start
+        )
+    )
+    return ok({"months": monthly_summary(rows.all(), periods)})
+
+
+# ---------- lista życzeń ----------
+
+
+def _wish(item: WishlistItem, rate: calc.WorkRate) -> dict:
+    work = calc.work_time(item.price, rate)
+    view = wish_view(
+        status=item.status,
+        price=item.price,
+        created_at=_aware(item.created_at),
+        cooldown_days=item.cooldown_days,
+        now=_now(),
+        work=work,
+    )
+    return {
+        "id": item.id,
+        "name": item.name,
+        "price": item.price,
+        "category": item.category,
+        "cooldown_days": item.cooldown_days,
+        "status": item.status,
+        "created_at": item.created_at.isoformat(),
+        "decided_at": item.decided_at.isoformat() if item.decided_at else None,
+        **view,
+    }
+
+
+async def _wishlist_payload(request: Request, user: User) -> dict:
+    rate = rate_from_user(user)
+    rows = await request.ctx.db.scalars(
+        select(WishlistItem).where(WishlistItem.user_id == user.id).order_by(WishlistItem.created_at.desc())
+    )
+    items = [_wish(i, rate) for i in rows]
+    return {"items": items, "stats": wish_stats(items), "currency": user.currency}
+
+
+@bp.get("/wishlist")
+@login_required
+async def get_wishlist(request: Request):
+    return ok(await _wishlist_payload(request, request.ctx.user))
+
+
+@bp.post("/wishlist")
+@login_required
+async def add_wish(request: Request):
+    data = parse(WishIn, request)
+    user = request.ctx.user
+    rate = rate_from_user(user)
+    item = WishlistItem(
+        user_id=user.id,
+        name=data.name,
+        price=data.price,
+        category=data.category.value if data.category else None,
+        cooldown_days=data.cooldown_days,
+    )
+    request.ctx.db.add(item)
+    await request.ctx.db.commit()
+    await request.ctx.db.refresh(item)
+    return ok(_wish(item, rate), 201)
+
+
+@bp.post("/wishlist/<item_id:str>/decision")
+@login_required
+async def decide_wish(request: Request, item_id: str):
+    data = parse(DecisionIn, request)
+    user = request.ctx.user
+    item = await _own(request, WishlistItem, item_id, user, "pozycji listy życzeń")
+    if item.status != "WAITING":
+        raise ApiError("Decyzja została już podjęta", 409)
+    item.status = data.decision
+    item.decided_at = _now()
+    await request.ctx.db.commit()
+    return ok(_wish(item, rate_from_user(user)))
+
+
+@bp.delete("/wishlist/<item_id:str>")
+@login_required
+async def delete_wish(request: Request, item_id: str):
+    item = await _own(request, WishlistItem, item_id, request.ctx.user, "pozycji listy życzeń")
+    await request.ctx.db.delete(item)
+    await request.ctx.db.commit()
+    return ok({"deleted": True})
+
+
+# ---------- cele oszczędnościowe ----------
+
+
+def _goal(g: SavingsGoal, hourly_rate: float | None) -> dict:
+    return {
+        "id": g.id,
+        "name": g.name,
+        "target_amount": g.target_amount,
+        "saved_amount": g.saved_amount,
+        "monthly_contribution": g.monthly_contribution,
+        "target_date": g.target_date.isoformat() if g.target_date else None,
+        "created_at": g.created_at.isoformat(),
+        **goal_view(
+            target_amount=g.target_amount,
+            saved_amount=g.saved_amount,
+            monthly_contribution=g.monthly_contribution,
+            target_date=g.target_date,
+            today=today(),
+            hourly_rate=hourly_rate,
+        ),
+    }
+
+
+def _hourly_rate(user: User) -> float | None:
+    if user.hourly_rate is None and user.monthly_income is None:
+        return None
+    return rate_from_user(user).hourly_rate
+
+
+def _sync_completion(g: SavingsGoal) -> None:
+    done = g.saved_amount >= g.target_amount
+    if done and g.completed_at is None:
+        g.completed_at = _now()
+    elif not done:
+        g.completed_at = None
+
+
+@bp.get("/goals")
+@login_required
+async def list_goals(request: Request):
+    user = request.ctx.user
+    rate = _hourly_rate(user)
+    rows = await request.ctx.db.scalars(
+        select(SavingsGoal).where(SavingsGoal.user_id == user.id).order_by(SavingsGoal.created_at.desc())
+    )
+    return ok({"items": [_goal(g, rate) for g in rows], "currency": user.currency})
+
+
+@bp.post("/goals")
+@login_required
+async def add_goal(request: Request):
+    data = parse(GoalIn, request)
+    user = request.ctx.user
+    g = SavingsGoal(user_id=user.id, **data.model_dump())
+    _sync_completion(g)
+    request.ctx.db.add(g)
+    await request.ctx.db.commit()
+    return ok(_goal(g, _hourly_rate(user)), 201)
+
+
+@bp.put("/goals/<goal_id:str>")
+@login_required
+async def update_goal(request: Request, goal_id: str):
+    data = parse(GoalIn, request)
+    user = request.ctx.user
+    g = await _own(request, SavingsGoal, goal_id, user, "celu")
+    for key, value in data.model_dump().items():
+        setattr(g, key, value)
+    _sync_completion(g)
+    await request.ctx.db.commit()
+    return ok(_goal(g, _hourly_rate(user)))
+
+
+@bp.post("/goals/<goal_id:str>/deposit")
+@login_required
+async def deposit(request: Request, goal_id: str):
+    data = parse(DepositIn, request)
+    user = request.ctx.user
+    g = await _own(request, SavingsGoal, goal_id, user, "celu")
+    if g.saved_amount + data.amount < 0:
+        raise ApiError("Nie można wypłacić więcej, niż odłożono", 422)
+    g.saved_amount = round(g.saved_amount + data.amount, 2)
+    _sync_completion(g)
+    await request.ctx.db.commit()
+    return ok(_goal(g, _hourly_rate(user)))
+
+
+@bp.delete("/goals/<goal_id:str>")
+@login_required
+async def delete_goal(request: Request, goal_id: str):
+    g = await _own(request, SavingsGoal, goal_id, request.ctx.user, "celu")
+    await request.ctx.db.delete(g)
+    await request.ctx.db.commit()
+    return ok({"deleted": True})
