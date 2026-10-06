@@ -37,8 +37,20 @@ class LoanIn(BaseModel):
 
     name: str = Field(min_length=1, max_length=100)
     installment_amount: float = Field(gt=0, description="wysokość miesięcznej raty")
-    installments_left: int = Field(ge=1, le=600, description="liczba rat do spłacenia")
+    # liczba rat do spłacenia: podaj ją albo datę końca spłaty (wtedy liczba rat maleje sama z czasem)
+    installments_left: int | None = Field(default=None, ge=1, le=600, description="liczba rat do spłacenia")
     loan_amount: float | None = Field(default=None, ge=0, description="pierwotna kwota kredytu (opcjonalnie)")
+    start_date: date | None = Field(default=None, description="początek okresu spłaty")
+    end_date: date | None = Field(default=None, description="koniec okresu spłaty")
+    payment_day: int | None = Field(default=None, ge=1, le=31, description="dzień miesiąca, w którym przypada rata")
+
+    @model_validator(mode="after")
+    def _need_installments_or_end(self):
+        if self.installments_left is None and self.end_date is None:
+            raise ValueError("Podaj liczbę rat do spłacenia albo datę końca spłaty")
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("Koniec spłaty nie może być przed jej początkiem")
+        return self
 
 
 class BudgetIn(BaseModel):

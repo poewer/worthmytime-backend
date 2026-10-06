@@ -98,8 +98,11 @@ class BudgetLoan(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     name: Mapped[str] = mapped_column(String(100))
     installment_amount: Mapped[float] = mapped_column(Float)
-    installments_left: Mapped[int] = mapped_column(Integer)
+    installments_left: Mapped[int] = mapped_column(Integer)  # migawka z chwili zapisu (gdy brak end_date)
     loan_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    payment_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Budget(Base):

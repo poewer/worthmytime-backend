@@ -28,7 +28,7 @@ from .helpers import (
     user_profile,
 )
 from .models import Budget, BudgetLoan, Calculation, User
-from .planning import period_of
+from .planning import period_of, remaining_installments
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
 from .security import create_token, hash_password, verify_password
 
@@ -212,7 +212,12 @@ async def put_budget(request: Request):
             position=i,
             name=loan.name,
             installment_amount=loan.installment_amount,
-            installments_left=loan.installments_left,
+            # migawka liczby rat na dziś (przy podanej dacie końca liczy się ona dynamicznie)
+            installments_left=loan.installments_left
+            or remaining_installments(today(), None, loan.end_date, loan.payment_day),
+            start_date=loan.start_date,
+            end_date=loan.end_date,
+            payment_day=loan.payment_day,
             loan_amount=loan.loan_amount,
         )
         for i, loan in enumerate(data.loans)

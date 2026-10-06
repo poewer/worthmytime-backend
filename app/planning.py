@@ -5,6 +5,7 @@ Bez I/O - łatwe do testów jednostkowych. Wyniki to symulacje na założeniach 
 
 from __future__ import annotations
 
+import calendar
 import math
 from collections import defaultdict
 from collections.abc import Iterable
@@ -138,3 +139,56 @@ def goal_view(
         "on_track": on_track,
         "work_hours_remaining": round(remaining / hourly_rate, 1) if hourly_rate else None,
     }
+
+
+# --- terminy spłat kredytów -------------------------------------------------------------------
+
+
+def _month_date(year: int, month: int, day: int) -> date:
+    """Dzień miesiąca z przycięciem do jego długości (termin 31. w lutym wypada 28./29.)."""
+    return date(year, month, min(day, calendar.monthrange(year, month)[1]))
+
+
+def add_months(d: date, months: int, day: int | None = None) -> date:
+    index = d.year * 12 + (d.month - 1) + months
+    return _month_date(index // 12, index % 12 + 1, day if day is not None else d.day)
+
+
+def next_payment_date(today: date, payment_day: int) -> date:
+    """Najbliższy termin raty w dniu `payment_day`, liczony od dziś włącznie."""
+    this_month = _month_date(today.year, today.month, payment_day)
+    return this_month if this_month >= today else add_months(today, 1, payment_day)
+
+
+def remaining_installments(
+    today: date, installments_left: int | None, end_date: date | None, payment_day: int | None
+) -> int:
+    """Ile rat zostało. Przy podanej dacie końca liczymy terminy do niej, więc liczba maleje sama z czasem."""
+    if end_date is None:
+        return installments_left or 0
+    if end_date < today:
+        return 0
+    day = payment_day or end_date.day
+    count, due = 0, next_payment_date(today, day)
+    while due <= end_date:
+        count += 1
+        due = add_months(due, 1, day)
+    return count
+
+
+def last_payment_date(today: date, remaining: int, payment_day: int | None, end_date: date | None) -> date | None:
+    """Data ostatniej raty: koniec okresu spłaty albo najbliższy termin + (pozostałe raty - 1) miesięcy."""
+    if remaining <= 0:
+        return None
+    if end_date is not None:
+        return end_date
+    day = payment_day or today.day
+    return add_months(next_payment_date(today, day), remaining - 1, day)
+
+
+def repayment_progress(start_date: date | None, end_date: date | None, today: date) -> float | None:
+    """Jaka część okresu spłaty (od - do) już minęła, w procentach."""
+    if not start_date or not end_date or end_date <= start_date:
+        return None
+    done = (min(max(today, start_date), end_date) - start_date).days
+    return round(done / (end_date - start_date).days * 100, 1)
