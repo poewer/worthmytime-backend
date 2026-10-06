@@ -2,6 +2,28 @@
 
 REST API (Sanic, Pydantic, SQLAlchemy async, Alembic).
 
+## Jak pracujemy
+
+Każda zmiana przechodzi ten sam cykl: **issue = nowy branch = pull request = merge = zamknięcie taska = usunięcie brancha**.
+
+```mermaid
+flowchart LR
+    A[Issue na tablicy] --> B[Nowy branch<br/>typ/numer-opis]
+    B --> C[Pull request<br/>z Closes #N]
+    C --> D[CI: test + pr-policy]
+    D --> E[Merge squash do main]
+    E --> F[Issue zamknięte,<br/>task w Done]
+    E --> G[Branch usunięty]
+```
+
+1. Zadanie zaczyna się od issue na [tablicy projektu](https://github.com/users/poewer/projects/6).
+2. Dla issue powstaje osobny branch `<typ>/<numer>-<opis>` (np. `feature/12-reset-hasla`), bez commitów prosto na `main`.
+3. Zmiany trafiają w pull requeście, którego opis zawiera `Closes #<numer>`.
+4. PR musi przejść CI (`test`, `pr-policy`); `main` jest chroniony.
+5. Po scaleniu (squash) GitHub zamyka issue, przenosi zadanie do Done i usuwa branch.
+
+Szczegóły i konwencje: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Uruchomienie lokalnie
 
 ```powershell
