@@ -11,6 +11,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 
+from .money import rnd
 from .schemas import CATEGORIES
 
 DAYS_PER_MONTH = 365.25 / 12
@@ -52,7 +53,7 @@ def last_periods(today: date, count: int) -> list[str]:
 def totals_by_category(rows: Iterable[tuple[str, float]]) -> dict[str, float]:
     totals = {c.value: 0.0 for c in CATEGORIES}
     for category, amount in rows:
-        totals[category] = round(totals.get(category, 0.0) + amount, 2)
+        totals[category] = rnd(totals.get(category, 0.0) + amount, 2)
     return totals
 
 
@@ -65,8 +66,8 @@ def monthly_summary(rows: Iterable[tuple[date, str, float]], periods: list[str])
             buckets[p][category] += amount
     out = []
     for p in periods:
-        totals = {k: round(v, 2) for k, v in buckets[p].items()} if p in buckets else {c.value: 0.0 for c in CATEGORIES}
-        out.append({"month": p, "totals": totals, "total": round(sum(totals.values()), 2)})
+        totals = {k: rnd(v, 2) for k, v in buckets[p].items()} if p in buckets else {c.value: 0.0 for c in CATEGORIES}
+        out.append({"month": p, "totals": totals, "total": rnd(sum(totals.values()), 2)})
     return out
 
 
@@ -93,10 +94,10 @@ def wish_stats(items: list[dict]) -> dict:
     waiting = [i for i in items if i["status"] == "WAITING"]
     return {
         "dropped_count": len(dropped),
-        "dropped_total": round(sum(i["price"] for i in dropped), 2),
-        "dropped_hours": round(sum((i["work"] or {}).get("hours", 0.0) for i in dropped), 1),
+        "dropped_total": rnd(sum(i["price"] for i in dropped), 2),
+        "dropped_hours": rnd(sum((i["work"] or {}).get("hours", 0.0) for i in dropped), 1),
         "waiting_count": len(waiting),
-        "waiting_total": round(sum(i["price"] for i in waiting), 2),
+        "waiting_total": rnd(sum(i["price"] for i in waiting), 2),
         "ready_count": sum(1 for i in waiting if i["ready"]),
     }
 
@@ -113,16 +114,16 @@ def goal_view(
     today: date,
     hourly_rate: float | None,
 ) -> dict:
-    remaining = round(max(target_amount - saved_amount, 0.0), 2)
-    percent = round(saved_amount / target_amount * 100, 1)
-    months_to_goal = round(remaining / monthly_contribution, 1) if monthly_contribution and remaining > 0 else None
-    eta = today + timedelta(days=round(months_to_goal * DAYS_PER_MONTH)) if months_to_goal is not None else None
+    remaining = rnd(max(target_amount - saved_amount, 0.0), 2)
+    percent = rnd(saved_amount / target_amount * 100, 1)
+    months_to_goal = rnd(remaining / monthly_contribution, 1) if monthly_contribution and remaining > 0 else None
+    eta = today + timedelta(days=rnd(months_to_goal * DAYS_PER_MONTH)) if months_to_goal is not None else None
 
     required_monthly = None
     on_track = None
     if target_date and remaining > 0:
         months_left = max((target_date - today).days / DAYS_PER_MONTH, 1.0)
-        required_monthly = round(remaining / months_left, 2)
+        required_monthly = rnd(remaining / months_left, 2)
         if eta is not None:
             on_track = eta <= target_date
 
@@ -137,7 +138,7 @@ def goal_view(
         "eta": eta.isoformat() if eta else None,
         "required_monthly": required_monthly,
         "on_track": on_track,
-        "work_hours_remaining": round(remaining / hourly_rate, 1) if hourly_rate else None,
+        "work_hours_remaining": rnd(remaining / hourly_rate, 1) if hourly_rate else None,
     }
 
 
@@ -191,4 +192,4 @@ def repayment_progress(start_date: date | None, end_date: date | None, today: da
     if not start_date or not end_date or end_date <= start_date:
         return None
     done = (min(max(today, start_date), end_date) - start_date).days
-    return round(done / (end_date - start_date).days * 100, 1)
+    return rnd(done / (end_date - start_date).days * 100, 1)

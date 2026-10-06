@@ -1,8 +1,13 @@
 from datetime import date
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, EmailStr, Field, model_validator
+
+from .money import coerce_money, coerce_rate
+
+MoneyIn = Annotated[float, BeforeValidator(coerce_money)]
+RateIn = Annotated[float, BeforeValidator(coerce_rate)]
 
 
 class Frequency(str, Enum):
@@ -36,10 +41,10 @@ class LoanIn(BaseModel):
     """Kredyt lub pożyczka w trakcie spłaty (rata to wymagalne zobowiązanie, P0)."""
 
     name: str = Field(min_length=1, max_length=100)
-    installment_amount: float = Field(gt=0, description="wysokość miesięcznej raty")
+    installment_amount: MoneyIn = Field(gt=0, description="wysokość miesięcznej raty")
     # liczba rat do spłacenia: podaj ją albo datę końca spłaty (wtedy liczba rat maleje sama z czasem)
     installments_left: int | None = Field(default=None, ge=1, le=600, description="liczba rat do spłacenia")
-    loan_amount: float | None = Field(default=None, ge=0, description="pierwotna kwota kredytu (opcjonalnie)")
+    loan_amount: MoneyIn | None = Field(default=None, ge=0, description="pierwotna kwota kredytu (opcjonalnie)")
     start_date: date | None = Field(default=None, description="początek okresu spłaty")
     end_date: date | None = Field(default=None, description="koniec okresu spłaty")
     payment_day: int | None = Field(default=None, ge=1, le=31, description="dzień miesiąca, w którym przypada rata")
@@ -84,10 +89,10 @@ class ProfileIn(BaseModel):
     currency: str = Field(default="PLN", min_length=3, max_length=3)
     # realna stawka: dojazd i koszty związane z pracą (opcjonalnie)
     commute_minutes_per_day: float = Field(default=0, ge=0, le=600)
-    work_costs_monthly: float = Field(default=0, ge=0)
+    work_costs_monthly: MoneyIn = Field(default=0, ge=0)
     rate_mode: Literal["NOMINAL", "REAL"] = "NOMINAL"
-    monthly_income: float | None = Field(default=None, gt=0)
-    hourly_rate: float | None = Field(default=None, gt=0)
+    monthly_income: MoneyIn | None = Field(default=None, gt=0)
+    hourly_rate: RateIn | None = Field(default=None, gt=0)
     hours_per_day: float = Field(default=8, gt=0, le=24)
     days_per_week: float = Field(default=5, gt=0, le=7)
 
@@ -101,22 +106,22 @@ class ProfileIn(BaseModel):
 
 class CostIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    amount: float = Field(ge=0)
+    amount: MoneyIn = Field(ge=0)
     frequency: Frequency = Frequency.ONE_TIME
 
 
 class CalculationIn(BaseModel):
     name: str = Field(default="Bez nazwy", min_length=1, max_length=200)
     type: CalcType = CalcType.SIMPLE
-    purchase_price: float = Field(default=0, ge=0)
+    purchase_price: MoneyIn = Field(default=0, ge=0)
     ownership_years: float | None = Field(default=None, gt=0, le=100)
-    resale_value: float = Field(default=0, ge=0)
+    resale_value: MoneyIn = Field(default=0, ge=0)
     costs: list[CostIn] = Field(default_factory=list, max_length=50)
     # plan budżetowy (opcjonalnie): kategoria + cel oszczędnościowy
     expected_uses: int | None = Field(default=None, ge=1, le=1_000_000)
     category: Category | None = None
-    already_saved: float = Field(default=0, ge=0)
-    monthly_contribution: float | None = Field(default=None, gt=0)
+    already_saved: MoneyIn = Field(default=0, ge=0)
+    monthly_contribution: MoneyIn | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _check(self):
@@ -129,7 +134,7 @@ class CalculationIn(BaseModel):
 
 class ExpenseIn(BaseModel):
     category: Category
-    amount: float = Field(gt=0, le=1_000_000_000)
+    amount: MoneyIn = Field(gt=0, le=1_000_000_000)
     note: str | None = Field(default=None, max_length=200)
     spent_on: date | None = None  # domyślnie dziś
 
@@ -137,7 +142,7 @@ class ExpenseIn(BaseModel):
 class RecurringIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     category: Category
-    amount: float = Field(gt=0, le=1_000_000_000)
+    amount: MoneyIn = Field(gt=0, le=1_000_000_000)
     day_of_month: int = Field(ge=1, le=31)  # w krótszych miesiącach płatność wypada w ostatnim dniu
     active: bool = True
     start_date: date | None = None  # domyślnie dziś; wcześniejsza data dopisze zaległe wpisy
@@ -149,7 +154,7 @@ class LoanPaymentIn(BaseModel):
 
 class WishIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    price: float = Field(gt=0, le=1_000_000_000)
+    price: MoneyIn = Field(gt=0, le=1_000_000_000)
     category: Category | None = None
     cooldown_days: int = Field(default=30, ge=0, le=365)
 
@@ -160,15 +165,15 @@ class DecisionIn(BaseModel):
 
 class GoalIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    target_amount: float = Field(gt=0, le=1_000_000_000)
-    saved_amount: float = Field(default=0, ge=0)
-    monthly_contribution: float | None = Field(default=None, gt=0)
+    target_amount: MoneyIn = Field(gt=0, le=1_000_000_000)
+    saved_amount: MoneyIn = Field(default=0, ge=0)
+    monthly_contribution: MoneyIn | None = Field(default=None, gt=0)
     target_date: date | None = None
     category: Category | None = None  # z której kategorii budżetu odkładamy (wyznacza maksymalną wpłatę)
 
 
 class DepositIn(BaseModel):
-    amount: float = Field(description="dodatnia wpłata albo ujemna wypłata")
+    amount: MoneyIn = Field(description="dodatnia wpłata albo ujemna wypłata")
 
     @model_validator(mode="after")
     def _nonzero(self):

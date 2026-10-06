@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from .budget import BudgetPlan
+from .money import rnd
 from .schemas import CATEGORIES, Category
 
 # Do tylu pierwszych dni miesiąca tempo wydatków jest zbyt zaszumione, żeby z niego prognozować.
@@ -41,17 +42,17 @@ def category_forecast(
     variable_spent  - wydane z rejestru w tym miesiącu (zmienne wydatki, na nich liczymy tempo)
     fixed           - stałe zobowiązania w kategorii (raty kredytów w Potrzebach), już wliczone w "wydane"
     """
-    spent = round(variable_spent + fixed, 2)
-    available = round(budget - spent, 2)
-    daily_limit = round(max(available, 0.0) / clock.days_left, 2)
+    spent = rnd(variable_spent + fixed, 2)
+    available = rnd(budget - spent, 2)
+    daily_limit = rnd(max(available, 0.0) / clock.days_left, 2)
 
-    pace = round(variable_spent / clock.day_of_month, 2) if variable_spent > 0 else 0.0
+    pace = rnd(variable_spent / clock.day_of_month, 2) if variable_spent > 0 else 0.0
     projected_total = None
     projected_usage = None
     runs_out_on = None
     if clock.day_of_month >= MIN_DAYS_FOR_PACE or variable_spent == 0:
-        projected_total = round(fixed + pace * clock.days_in_month, 2)
-        projected_usage = round(projected_total / budget * 100, 1) if budget > 0 else None
+        projected_total = rnd(fixed + pace * clock.days_in_month, 2)
+        projected_usage = rnd(projected_total / budget * 100, 1) if budget > 0 else None
         if pace > 0 and available > 0:
             days_to_zero = int(available // pace)
             exhaustion = clock.today + timedelta(days=days_to_zero)
@@ -67,7 +68,7 @@ def category_forecast(
 
     return {
         "category": category.value,
-        "budget": round(budget, 2),
+        "budget": rnd(budget, 2),
         "spent": spent,
         "available": available,
         "daily_limit": daily_limit,

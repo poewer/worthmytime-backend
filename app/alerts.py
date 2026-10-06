@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from .budget import BudgetPlan
+from .money import rnd
 from .planning import next_payment_date
 from .schemas import CATEGORIES
 
@@ -45,7 +46,7 @@ def rule_category_usage(plan: BudgetPlan) -> list[dict]:
         if budget <= 0:
             continue
         used = plan.effective_spent(category)
-        percent = round(used / budget * 100, 1)
+        percent = rnd(used / budget * 100, 1)
         if percent < USAGE_WARN_PERCENT:
             continue
         over = percent >= USAGE_CRITICAL_PERCENT
@@ -79,7 +80,7 @@ def rule_budget_deficit(plan: BudgetPlan) -> list[dict]:
             "/budget",
             monthly_income=plan.monthly_income,
             total_spent=plan.total_spent,
-            deficit=round(plan.total_spent - plan.monthly_income, 2),
+            deficit=rnd(plan.total_spent - plan.monthly_income, 2),
         )
     ]
 
