@@ -1,4 +1,6 @@
+from datetime import date
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 
@@ -68,6 +70,10 @@ class Credentials(BaseModel):
 
 class ProfileIn(BaseModel):
     currency: str = Field(default="PLN", min_length=3, max_length=3)
+    # realna stawka: dojazd i koszty związane z pracą (opcjonalnie)
+    commute_minutes_per_day: float = Field(default=0, ge=0, le=600)
+    work_costs_monthly: float = Field(default=0, ge=0)
+    rate_mode: Literal["NOMINAL", "REAL"] = "NOMINAL"
     monthly_income: float | None = Field(default=None, gt=0)
     hourly_rate: float | None = Field(default=None, gt=0)
     hours_per_day: float = Field(default=8, gt=0, le=24)
@@ -95,6 +101,7 @@ class CalculationIn(BaseModel):
     resale_value: float = Field(default=0, ge=0)
     costs: list[CostIn] = Field(default_factory=list, max_length=50)
     # plan budżetowy (opcjonalnie): kategoria + cel oszczędnościowy
+    expected_uses: int | None = Field(default=None, ge=1, le=1_000_000)
     category: Category | None = None
     already_saved: float = Field(default=0, ge=0)
     monthly_contribution: float | None = Field(default=None, gt=0)
@@ -105,6 +112,42 @@ class CalculationIn(BaseModel):
             raise ValueError("Cost of ownership wymaga okresu posiadania (ownership_years)")
         if self.type == CalcType.RECURRING and not self.costs:
             raise ValueError("Koszt cykliczny wymaga co najmniej jednej pozycji w costs")
+        return self
+
+
+class ExpenseIn(BaseModel):
+    category: Category
+    amount: float = Field(gt=0, le=1_000_000_000)
+    note: str | None = Field(default=None, max_length=200)
+    spent_on: date | None = None  # domyślnie dziś
+
+
+class WishIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    price: float = Field(gt=0, le=1_000_000_000)
+    category: Category | None = None
+    cooldown_days: int = Field(default=30, ge=0, le=365)
+
+
+class DecisionIn(BaseModel):
+    decision: Literal["BOUGHT", "DROPPED"]
+
+
+class GoalIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    target_amount: float = Field(gt=0, le=1_000_000_000)
+    saved_amount: float = Field(default=0, ge=0)
+    monthly_contribution: float | None = Field(default=None, gt=0)
+    target_date: date | None = None
+
+
+class DepositIn(BaseModel):
+    amount: float = Field(description="dodatnia wpłata albo ujemna wypłata")
+
+    @model_validator(mode="after")
+    def _nonzero(self):
+        if self.amount == 0:
+            raise ValueError("Kwota nie może być zerem")
         return self
 
 

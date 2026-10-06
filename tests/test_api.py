@@ -195,6 +195,123 @@ def test_loans_are_saved_with_budget_and_counted_in_needs(client):
     assert res.json["loans"] == [] and res.json["monthly_loans"] == 0
 
 
+def _register(client, email):
+    _, res = client.post("/api/v1/auth/register", json={"email": email, "password": "supersecret1"})
+    return {"Authorization": f"Bearer {res.json['token']}"}
+
+
+def test_expense_ledger_feeds_budget_and_summary(client):
+    auth = _register(client, "ledger@b.pl")
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+    pct = {"NEEDS": 50, "FUTURE": 25, "GOALS": 15, "FUN": 10}
+    client.put("/api/v1/budget", json={"percentages": pct, "spent": {"FUN": 100}}, headers=auth)
+
+    _, res = client.post("/api/v1/expenses", json={"category": "FUN", "amount": 200, "note": "kino"}, headers=auth)
+    assert res.status == 201
+    expense_id = res.json["id"]
+    _, res = client.get("/api/v1/expenses", headers=auth)
+    assert res.json["total"] == 200 and res.json["totals"]["FUN"] == 200 and len(res.json["items"]) == 1
+
+    _, res = client.get("/api/v1/budget", headers=auth)
+    assert res.json["spent"]["FUN"] == 100  # ręczna część, edytowana w formularzu
+    assert res.json["ledger"]["FUN"] == 200
+    assert res.json["spent_total"]["FUN"] == 300
+
+    body = {"calculation": {"name": "Gra", "purchase_price": 500, "category": "FUN"}}
+    _, res = client.post("/api/v1/calculate", json=body, headers=auth)
+    assert res.json["budget"]["spent"] == 300 and res.json["budget"]["available"] == 700
+
+    _, res = client.get("/api/v1/expenses/summary?months=3", headers=auth)
+    assert len(res.json["months"]) == 3 and res.json["months"][-1]["totals"]["FUN"] == 200
+    assert client.get("/api/v1/expenses/summary?months=abc", headers=auth)[1].status == 422
+    assert client.get("/api/v1/expenses?month=2026-13", headers=auth)[1].status == 422
+    assert client.post("/api/v1/expenses", json={"category": "FUN", "amount": -5}, headers=auth)[1].status == 422
+
+    other = _register(client, "ledger2@b.pl")
+    assert client.delete(f"/api/v1/expenses/{expense_id}", headers=other)[1].status == 404
+    assert client.delete(f"/api/v1/expenses/{expense_id}", headers=auth)[1].status == 200
+    _, res = client.get("/api/v1/expenses", headers=auth)
+    assert res.json["total"] == 0
+
+
+def test_wishlist_cooldown_decision_and_savings(client):
+    auth = _register(client, "wish@b.pl")
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+
+    body = {"name": "PlayStation", "price": 2500, "cooldown_days": 0}
+    _, res = client.post("/api/v1/wishlist", json=body, headers=auth)
+    assert res.status == 201 and res.json["ready"] is True and res.json["work"]["hours"] > 43
+    ready_id = res.json["id"]
+    _, res = client.post("/api/v1/wishlist", json={"name": "Rower", "price": 3000}, headers=auth)
+    assert res.json["ready"] is False and res.json["days_left"] == 30 and res.json["cooldown_days"] == 30
+
+    decide = f"/api/v1/wishlist/{ready_id}/decision"
+    _, res = client.post(decide, json={"decision": "DROPPED"}, headers=auth)
+    assert res.json["status"] == "DROPPED" and res.json["decided_at"]
+    assert client.post(decide, json={"decision": "BOUGHT"}, headers=auth)[1].status == 409
+    assert client.post(decide, json={"decision": "XYZ"}, headers=auth)[1].status == 422
+
+    _, res = client.get("/api/v1/wishlist", headers=auth)
+    stats = res.json["stats"]
+    assert stats["dropped_total"] == 2500 and stats["dropped_hours"] > 43 and stats["waiting_count"] == 1
+    other = _register(client, "wish2@b.pl")
+    assert client.delete(f"/api/v1/wishlist/{ready_id}", headers=other)[1].status == 404
+    assert client.delete(f"/api/v1/wishlist/{ready_id}", headers=auth)[1].status == 200
+
+
+def test_savings_goals_progress_and_deposits(client):
+    auth = _register(client, "goal@b.pl")
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+    goal = {"name": "Wakacje", "target_amount": 5000, "saved_amount": 500, "monthly_contribution": 1000}
+    _, res = client.post("/api/v1/goals", json=goal, headers=auth)
+    assert res.status == 201
+    assert res.json["months_to_goal"] == 4.5 and res.json["percent"] == 10.0 and res.json["completed"] is False
+    gid = res.json["id"]
+
+    deposit = f"/api/v1/goals/{gid}/deposit"
+    _, res = client.post(deposit, json={"amount": 1000}, headers=auth)
+    assert res.json["saved_amount"] == 1500 and res.json["remaining"] == 3500
+    assert client.post(deposit, json={"amount": 0}, headers=auth)[1].status == 422
+    assert client.post(deposit, json={"amount": -9999}, headers=auth)[1].status == 422
+
+    _, res = client.post(deposit, json={"amount": 3500}, headers=auth)
+    assert res.json["completed"] is True and res.json["remaining"] == 0
+    _, res = client.post(deposit, json={"amount": -100}, headers=auth)
+    assert res.json["completed"] is False  # wypłata cofa ukończenie
+
+    _, res = client.put(f"/api/v1/goals/{gid}", json={**goal, "name": "Wakacje 2027"}, headers=auth)
+    assert res.json["name"] == "Wakacje 2027"
+    other = _register(client, "goal2@b.pl")
+    assert client.delete(f"/api/v1/goals/{gid}", headers=other)[1].status == 404
+    _, res = client.get("/api/v1/goals", headers=auth)
+    assert len(res.json["items"]) == 1
+
+
+def test_real_hourly_rate_profile_and_saved_calculation(client):
+    auth = _register(client, "real@b.pl")
+    profile = {"monthly_income": 10000, "commute_minutes_per_day": 90, "work_costs_monthly": 600}
+    _, res = client.put("/api/v1/profile", json=profile, headers=auth)
+    assert res.json["nominal_hourly_rate"] == 57.69 and res.json["real_hourly_rate"] == 45.67
+    assert res.json["effective_hourly_rate"] == 57.69  # tryb NOMINAL
+
+    _, res = client.put("/api/v1/profile", json={**profile, "rate_mode": "REAL"}, headers=auth)
+    assert res.json["effective_hourly_rate"] == 45.67 and res.json["rate_mode"] == "REAL"
+
+    _, res = client.post("/api/v1/calculations", json={"name": "x", "purchase_price": 2000}, headers=auth)
+    assert res.json["result"]["work"]["hours"] > 43.4  # realnie więcej godzin niż 34,7 h nominalnie
+    assert res.json["result"]["work"]["income_percent"] == 20.0  # udział liczony od dochodu netto
+    _, res = client.get(f"/api/v1/calculations/{res.json['id']}", headers=auth)
+    assert res.json["result"]["work"]["income_percent"] == 20.0  # także po odczycie z migawki
+
+
+def test_cost_per_use_in_api(client):
+    body = {"profile": PROFILE, "calculation": {"name": "Rower", "purchase_price": 3000, "expected_uses": 300}}
+    _, res = client.post("/api/v1/calculate", json=body)
+    assert res.json["per_use"]["cost"] == 10.0 and res.json["per_use"]["work_minutes"] > 0
+    body["calculation"]["expected_uses"] = 0
+    assert client.post("/api/v1/calculate", json=body)[1].status == 422
+
+
 def test_other_user_cannot_read(client):
     _, r1 = client.post("/api/v1/auth/register", json={"email": "u1@b.pl", "password": "supersecret1"})
     _, r2 = client.post("/api/v1/auth/register", json={"email": "u2@b.pl", "password": "supersecret1"})

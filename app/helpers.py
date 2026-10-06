@@ -1,3 +1,4 @@
+from datetime import date
 from functools import wraps
 from typing import TypeVar
 
@@ -9,8 +10,9 @@ from sqlalchemy import select
 from . import calc
 from .budget import BudgetPlan, analyze, loan_view
 from .errors import ApiError
-from .models import Budget, BudgetLoan, Calculation, Cost, User
-from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, LoanIn, ProfileIn
+from .models import Budget, BudgetLoan, Calculation, Cost, Expense, User
+from .planning import month_bounds, period_of, totals_by_category
+from .schemas import CATEGORIES, BudgetIn, CalculationIn, Category, CostIn, LoanIn, ProfileIn
 from .security import decode_token
 
 M = TypeVar("M", bound=BaseModel)
@@ -61,9 +63,21 @@ def user_profile(user: User) -> dict:
         "hourly_rate": user.hourly_rate,
         "hours_per_day": user.hours_per_day,
         "days_per_week": user.days_per_week,
+        "commute_minutes_per_day": user.commute_minutes_per_day,
+        "work_costs_monthly": user.work_costs_monthly,
+        "rate_mode": user.rate_mode,
         "effective_hourly_rate": _effective_rate(user),
         "hours_per_month": _effective_hours_month(user),
+        **_rate_breakdown(user),
     }
+
+
+def _rate_breakdown(user: User) -> dict:
+    """Stawka nominalna i realna obok siebie (realna uwzględnia dojazd i koszty pracy)."""
+    if user.hourly_rate is None and user.monthly_income is None:
+        return {"nominal_hourly_rate": None, "real_hourly_rate": None}
+    r = rate_from_user(user)
+    return {"nominal_hourly_rate": round(r.nominal_rate, 2), "real_hourly_rate": round(r.real_rate, 2)}
 
 
 def _effective_rate(user: User) -> float | None:
@@ -79,11 +93,27 @@ def _effective_hours_month(user: User) -> float:
 def rate_from_user(user: User) -> calc.WorkRate:
     if user.hourly_rate is None and user.monthly_income is None:
         raise ApiError("Uzupełnij profil finansowy (dochód lub stawka godzinowa)", 409)
-    return calc.resolve_rate(user.monthly_income, user.hourly_rate, user.hours_per_day, user.days_per_week)
+    return calc.resolve_rate(
+        user.monthly_income,
+        user.hourly_rate,
+        user.hours_per_day,
+        user.days_per_week,
+        user.commute_minutes_per_day,
+        user.work_costs_monthly,
+        user.rate_mode,
+    )
 
 
 def rate_from_profile(p: ProfileIn) -> calc.WorkRate:
-    return calc.resolve_rate(p.monthly_income, p.hourly_rate, p.hours_per_day, p.days_per_week)
+    return calc.resolve_rate(
+        p.monthly_income,
+        p.hourly_rate,
+        p.hours_per_day,
+        p.days_per_week,
+        p.commute_minutes_per_day,
+        p.work_costs_monthly,
+        p.rate_mode,
+    )
 
 
 async def resolve_rate_for_request(request: Request, profile: ProfileIn | None) -> tuple[calc.WorkRate, str]:
@@ -103,6 +133,7 @@ def to_input(c: Calculation) -> CalculationIn:
         purchase_price=c.purchase_price,
         ownership_years=c.ownership_years,
         resale_value=c.resale_value,
+        expected_uses=c.expected_uses,
         category=c.category,
         already_saved=c.already_saved,
         monthly_contribution=c.monthly_contribution,
@@ -111,7 +142,7 @@ def to_input(c: Calculation) -> CalculationIn:
 
 
 def rate_from_calc(c: Calculation) -> calc.WorkRate:
-    return calc.WorkRate(c.hourly_rate, c.hours_per_day, c.days_per_week)
+    return calc.WorkRate(c.hourly_rate, c.hours_per_day, c.days_per_week, net_income=c.net_income)
 
 
 def apply_input(c: Calculation, data: CalculationIn) -> None:
@@ -120,6 +151,7 @@ def apply_input(c: Calculation, data: CalculationIn) -> None:
     c.purchase_price = data.purchase_price
     c.ownership_years = data.ownership_years
     c.resale_value = data.resale_value
+    c.expected_uses = data.expected_uses
     c.category = data.category.value if data.category else None
     c.already_saved = data.already_saved
     c.monthly_contribution = data.monthly_contribution
@@ -157,15 +189,31 @@ def plan_from_input(budget: BudgetIn | None, monthly_income: float) -> BudgetPla
     )
 
 
-def plan_from_row(row: Budget | None, monthly_income: float, loans: list[BudgetLoan] | None = None) -> BudgetPlan:
+def manual_spent(row: Budget | None, period: str | None) -> dict[Category, float]:
+    """Ręczne kwoty "wydane" obowiązują tylko w miesiącu, w którym je wpisano (po zmianie miesiąca wygasają)."""
+    valid = row is not None and (row.spent_period is None or period is None or row.spent_period == period)
+    return {c: (getattr(row, f"spent_{c.value.lower()}") if valid else 0.0) for c in CATEGORIES}
+
+
+def plan_from_row(
+    row: Budget | None,
+    monthly_income: float,
+    loans: list[BudgetLoan] | None = None,
+    ledger: dict[str, float] | None = None,
+    period: str | None = None,
+) -> BudgetPlan:
+    """Wydane w kategorii = ręczna kwota z bieżącego miesiąca + suma wpisów z rejestru wydatków."""
     loans = loans or []
+    ledger = ledger or {}
+    manual = manual_spent(row, period)
+    spent = {c: round(manual[c] + ledger.get(c.value, 0.0), 2) for c in CATEGORIES}
     if row is None:
-        # kredyty obowiązują także bez ustawionych procentów - to realne zobowiązania
-        return BudgetPlan(monthly_income=monthly_income, **_loan_totals(loans))
+        # kredyty i wpisy z rejestru obowiązują także bez ustawionych procentów - to realne liczby
+        return BudgetPlan(monthly_income=monthly_income, spent=spent, **_loan_totals(loans))
     return BudgetPlan(
         monthly_income=monthly_income,
         percentages={c: getattr(row, f"pct_{c.value.lower()}") for c in CATEGORIES},
-        spent={c: getattr(row, f"spent_{c.value.lower()}") for c in CATEGORIES},
+        spent=spent,
         is_custom=True,
         **_loan_totals(loans),
     )
@@ -178,8 +226,30 @@ async def load_loans(request: Request, user: User) -> list[BudgetLoan]:
     return list(rows)
 
 
+def today() -> date:
+    return date.today()
+
+
+async def load_ledger(request: Request, user: User, period: str) -> dict[str, float]:
+    """Sumy wydatków z rejestru w danym miesiącu per kategoria."""
+    start, end = month_bounds(period)
+    rows = await request.ctx.db.execute(
+        select(Expense.category, Expense.amount).where(
+            Expense.user_id == user.id, Expense.spent_on >= start, Expense.spent_on < end
+        )
+    )
+    return totals_by_category((c, a) for c, a in rows)
+
+
 async def load_plan(request: Request, user: User, monthly_income: float) -> BudgetPlan:
-    return plan_from_row(await request.ctx.db.get(Budget, user.id), monthly_income, await load_loans(request, user))
+    period = period_of(today())
+    return plan_from_row(
+        await request.ctx.db.get(Budget, user.id),
+        monthly_income,
+        await load_loans(request, user),
+        await load_ledger(request, user, period),
+        period,
+    )
 
 
 def serialize_budget(
@@ -187,9 +257,13 @@ def serialize_budget(
     monthly_income: float | None,
     loans: list[BudgetLoan] | None = None,
     hourly_rate: float | None = None,
+    ledger: dict[str, float] | None = None,
+    period: str | None = None,
 ) -> dict:
     loans = loans or []
-    plan = plan_from_row(row, monthly_income or 0.0, loans)
+    ledger = ledger or {}
+    plan = plan_from_row(row, monthly_income or 0.0, loans, ledger, period)
+    manual = manual_spent(row, period)
     return {
         "loans": [
             {
@@ -202,7 +276,10 @@ def serialize_budget(
         "loans_income_percent": round(plan.monthly_loans / monthly_income * 100, 1) if monthly_income else None,
         "last_installment_in_months": plan.last_installment_in_months,
         "percentages": {c.value: plan.percentages[c] for c in CATEGORIES},
-        "spent": {c.value: plan.spent[c] for c in CATEGORIES},
+        # "spent" = ręczna kwota z bieżącego miesiąca (to edytuje formularz); razem z rejestrem w "spent_total"
+        "spent": {c.value: manual[c] for c in CATEGORIES},
+        "ledger": {c.value: ledger.get(c.value, 0.0) for c in CATEGORIES},
+        "spent_total": {c.value: plan.spent[c] for c in CATEGORIES},
         "amounts": {c.value: plan.category_budget(c) for c in CATEGORIES} if monthly_income else None,
         "available": {c.value: plan.available(c) for c in CATEGORIES} if monthly_income else None,
         "monthly_income": round(monthly_income, 2) if monthly_income else None,

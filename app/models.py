@@ -1,7 +1,7 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -29,6 +29,9 @@ class User(Base):
     hourly_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     hours_per_day: Mapped[float] = mapped_column(Float, default=8.0)
     days_per_week: Mapped[float] = mapped_column(Float, default=5.0)
+    commute_minutes_per_day: Mapped[float] = mapped_column(Float, default=0.0)
+    work_costs_monthly: Mapped[float] = mapped_column(Float, default=0.0)
+    rate_mode: Mapped[str] = mapped_column(String(7), default="NOMINAL")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     calculations: Mapped[list["Calculation"]] = relationship(
@@ -52,6 +55,8 @@ class Calculation(Base):
     hourly_rate: Mapped[float] = mapped_column(Float)
     hours_per_day: Mapped[float] = mapped_column(Float, default=8.0)
     days_per_week: Mapped[float] = mapped_column(Float, default=5.0)
+    expected_uses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    net_income: Mapped[float | None] = mapped_column(Float, nullable=True)  # migawka dochodu netto
     category: Mapped[str | None] = mapped_column(String(10), nullable=True)
     already_saved: Mapped[float] = mapped_column(Float, default=0.0)
     monthly_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -111,4 +116,51 @@ class Budget(Base):
     spent_future: Mapped[float] = mapped_column(Float, default=0.0)
     spent_goals: Mapped[float] = mapped_column(Float, default=0.0)
     spent_fun: Mapped[float] = mapped_column(Float, default=0.0)
+    # miesiąc (YYYY-MM), którego dotyczą ręczne kwoty spent_*; po zmianie miesiąca wygasają
+    spent_period: Mapped[str | None] = mapped_column(String(7), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+class Expense(Base):
+    """Wydatek zapisany w rejestrze; sumy z bieżącego miesiąca zasilają "wydane" w kategoriach budżetu."""
+
+    __tablename__ = "expenses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    category: Mapped[str] = mapped_column(String(10))
+    amount: Mapped[float] = mapped_column(Float)
+    note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    spent_on: Mapped[date] = mapped_column(Date, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class WishlistItem(Base):
+    """Rzecz, którą użytkownik chce kupić, z okresem ostygnięcia na przemyślenie decyzji."""
+
+    __tablename__ = "wishlist_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    price: Mapped[float] = mapped_column(Float)
+    category: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    cooldown_days: Mapped[int] = mapped_column(Integer, default=30)
+    status: Mapped[str] = mapped_column(String(10), default="WAITING")  # WAITING | BOUGHT | DROPPED
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SavingsGoal(Base):
+    """Trwały cel oszczędnościowy z postępem."""
+
+    __tablename__ = "savings_goals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    target_amount: Mapped[float] = mapped_column(Float)
+    saved_amount: Mapped[float] = mapped_column(Float, default=0.0)
+    monthly_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

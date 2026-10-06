@@ -24,9 +24,13 @@ RECURRING_HORIZONS = [("1 month", 1 / 12), ("1 year", 1), ("5 years", 5), ("10 y
 
 @dataclass(frozen=True)
 class WorkRate:
-    hourly_rate: float
+    hourly_rate: float  # stawka użyta do przeliczeń (nominalna albo realna)
     hours_per_day: float = 8.0
     days_per_week: float = 5.0
+    # dochód netto niezależny od trybu stawki; None = stawka * godziny w miesiącu
+    net_income: float | None = None
+    nominal_rate: float | None = None
+    real_rate: float | None = None
 
     @property
     def hours_per_month(self) -> float:
@@ -34,7 +38,9 @@ class WorkRate:
 
     @property
     def monthly_income(self) -> float:
-        """Efektywny miesięczny dochód netto (przy stawce podanej wprost: stawka * godziny w miesiącu)."""
+        """Miesięczny dochód netto (przy stawce podanej wprost: stawka * godziny w miesiącu)."""
+        if self.net_income is not None:
+            return self.net_income
         return self.hourly_rate * self.hours_per_month
 
     @property
@@ -42,21 +48,43 @@ class WorkRate:
         return self.days_per_week * WEEKS_PER_YEAR
 
 
+def real_hourly_rate(
+    net_income: float,
+    hours_per_month: float,
+    days_per_week: float,
+    commute_minutes_per_day: float,
+    work_costs_monthly: float,
+) -> float:
+    """Realna stawka: (dochód - koszty pracy) / (godziny pracy + godziny dojazdu w miesiącu)."""
+    commute_hours = commute_minutes_per_day / 60 * days_per_week * WEEKS_PER_MONTH
+    earned = max(net_income - work_costs_monthly, 0.01)
+    return earned / (hours_per_month + commute_hours)
+
+
 def resolve_rate(
     monthly_income: float | None,
     hourly_rate: float | None,
     hours_per_day: float = 8.0,
     days_per_week: float = 5.0,
+    commute_minutes_per_day: float = 0.0,
+    work_costs_monthly: float = 0.0,
+    rate_mode: str = "NOMINAL",
 ) -> WorkRate:
-    """Bezpośrednia stawka ma pierwszeństwo; w przeciwnym razie z dochodu."""
+    """Bezpośrednia stawka ma pierwszeństwo; w przeciwnym razie z dochodu.
+
+    rate_mode=REAL zastępuje stawkę nominalną realną (z dojazdem i kosztami związanymi z pracą).
+    """
     base = WorkRate(1.0, hours_per_day, days_per_week)
+    hpm = base.hours_per_month
     if hourly_rate is not None:
-        rate = hourly_rate
+        nominal, income = hourly_rate, hourly_rate * hpm
     elif monthly_income is not None:
-        rate = monthly_income / base.hours_per_month
+        nominal, income = monthly_income / hpm, monthly_income
     else:
         raise ValueError("Brak dochodu i stawki godzinowej")
-    return WorkRate(rate, hours_per_day, days_per_week)
+    real = real_hourly_rate(income, hpm, days_per_week, commute_minutes_per_day, work_costs_monthly)
+    used = real if rate_mode == "REAL" else nominal
+    return WorkRate(used, hours_per_day, days_per_week, net_income=income, nominal_rate=nominal, real_rate=real)
 
 
 def cost_over_years(amount: float, frequency: Frequency, years: float) -> float:
@@ -82,8 +110,8 @@ def work_time(money: float, rate: WorkRate) -> dict:
         "working_weeks": round(weeks, 2),
         "working_months": round(months, 2),
         "working_years": round(years, 2),
-        # jaką część miesięcznej wypłaty pochłania wydatek (100 = cała wypłata)
-        "income_percent": round(months * 100, 1),
+        # jaką część miesięcznej wypłaty pochłania wydatek (100 = cała wypłata); zawsze od dochodu netto
+        "income_percent": round(money / rate.monthly_income * 100, 1) if rate.monthly_income > 0 else None,
     }
 
 
@@ -121,6 +149,14 @@ def compute(calc: CalculationIn, rate: WorkRate) -> dict:
         lines.append({"name": "Resale", "amount": -calc.resale_value})
 
     total = round(sum(line["amount"] for line in lines), 2)
+    per_use = None
+    if calc.expected_uses and total > 0:
+        per_use_cost = total / calc.expected_uses
+        per_use = {
+            "uses": calc.expected_uses,
+            "cost": round(per_use_cost, 2),
+            "work_minutes": round(per_use_cost / rate.hourly_rate * 60, 1),
+        }
     result = {
         "name": calc.name,
         "type": calc.type.value,
@@ -129,6 +165,7 @@ def compute(calc: CalculationIn, rate: WorkRate) -> dict:
         "hourly_rate": round(rate.hourly_rate, 2),
         "work": work_time(total, rate),
         "life_cost": _life_cost(total, years) if years else None,
+        "per_use": per_use,
     }
     return result
 
