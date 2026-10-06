@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from . import calc
 from .errors import ApiError
+from .forecast import forecast
 from .helpers import load_plan, login_required, ok, parse, rate_from_user, today
 from .models import Expense, SavingsGoal, User, WishlistItem
 from .planning import (
@@ -39,6 +40,20 @@ async def _own(request: Request, model, item_id: str, user: User, what: str):
     if row is None or row.user_id != user.id:
         raise ApiError(f"Nie znaleziono: {what}", 404)
     return row
+
+
+# ---------- prognoza budżetu ----------
+
+
+@bp.get("/budget/forecast")
+@login_required
+async def budget_forecast(request: Request):
+    """Dzienny limit i prognoza końca miesiąca dla każdej kategorii budżetu."""
+    user = request.ctx.user
+    if user.hourly_rate is None and user.monthly_income is None:
+        raise ApiError("Uzupełnij profil finansowy (dochód lub stawka godzinowa)", 409)
+    plan = await load_plan(request, user, rate_from_user(user).monthly_income)
+    return ok({"currency": user.currency, **forecast(plan, today())})
 
 
 # ---------- rejestr wydatków ----------

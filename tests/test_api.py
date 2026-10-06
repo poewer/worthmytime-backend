@@ -431,6 +431,21 @@ def test_loan_dates_payment_day_and_derived_schedule(client):
     assert res.json["loans"][0]["next_payment_date"] is not None
 
 
+def test_budget_forecast_endpoint(client):
+    auth = _register(client, "forecast@b.pl")
+    assert client.get("/api/v1/budget/forecast", headers=auth)[1].status == 409  # brak profilu
+    assert client.get("/api/v1/budget/forecast")[1].status == 401
+
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+    client.post("/api/v1/expenses", json={"category": "FUN", "amount": 200}, headers=auth)
+    _, res = client.get("/api/v1/budget/forecast", headers=auth)
+    assert res.status == 200 and res.json["currency"] == "PLN"
+    fun = next(c for c in res.json["categories"] if c["category"] == "FUN")
+    assert fun["budget"] == 1000 and fun["spent"] == 200 and fun["available"] == 800
+    assert fun["daily_limit"] > 0 and fun["status"] in {"OK", "WARN"}
+    assert res.json["days_left"] >= 1
+
+
 def test_other_user_cannot_read(client):
     _, r1 = client.post("/api/v1/auth/register", json={"email": "u1@b.pl", "password": "supersecret1"})
     _, r2 = client.post("/api/v1/auth/register", json={"email": "u2@b.pl", "password": "supersecret1"})
