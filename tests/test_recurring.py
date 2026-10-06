@@ -75,7 +75,8 @@ def test_new_template_does_not_backfill_and_is_listed(client):
     # termin już minięty w tym miesiącu (albo dopiero w przyszłości, gdy dziś jest 1.): bez start_date nic nie powstaje
     not_due = today().day - 1 if today().day > 1 else 28
     client.post("/api/v1/recurring-expenses", json=_template(day_of_month=not_due), headers=auth)
-    gym = _template(name="Siłownia", day_of_month=28, amount=100)\n    client.post("/api/v1/recurring-expenses", json=gym, headers=auth)
+    gym = _template(name="Siłownia", day_of_month=28, amount=100)
+    client.post("/api/v1/recurring-expenses", json=gym, headers=auth)
     _, res = client.get("/api/v1/expenses", headers=auth)
     assert [e["note"] for e in res.json["items"]] == (["Siłownia"] if today().day == 28 else [])
     _, res = client.get("/api/v1/recurring-expenses", headers=auth)
@@ -167,5 +168,6 @@ def test_pay_loan_installment_creates_needs_entry_once_per_month(client):
 
     other = _register(client, "loan2@b.pl")
     assert client.post(f"/api/v1/budget/loans/{loan_id}/pay", json={}, headers=other)[1].status == 404
+
 
 
