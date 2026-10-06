@@ -7,15 +7,18 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from .config import settings
+from .errors import ApiError
+from .helpers import client_ip
 from .logging_config import setup_logging
 from .models import Base
+from .ratelimit import Limits, RateLimiter
 from .routes import bp
 from .routes_planning import bp as planning_bp
 
 log = setup_logging()
 
 
-def create_app(database_url: str | None = None, create_schema: bool = False) -> Sanic:
+def create_app(database_url: str | None = None, create_schema: bool = False, limits: Limits | None = None) -> Sanic:
     log.info(
         "Start aplikacji (tryb: %s, poziom logów: %s, CORS: %s)",
         "DEBUG" if settings.debug else "PRODUKCJA",
@@ -33,6 +36,16 @@ def create_app(database_url: str | None = None, create_schema: bool = False) -> 
     app = Sanic("worthmytime", configure_logging=True)
     app.config.FALLBACK_ERROR_FORMAT = "json"
     origins = settings.cors_origin_list
+    app.ctx.limiter = RateLimiter(
+        limits
+        or Limits(
+            enabled=settings.rate_limit_enabled,
+            api_per_minute=settings.rate_limit_api_per_minute,
+            auth_per_minute=settings.rate_limit_auth_per_minute,
+            login_max_failures=settings.login_max_failures,
+            login_window_seconds=settings.login_lock_seconds,
+        )
+    )
 
     @app.before_server_start
     async def setup_db(app):
@@ -69,6 +82,10 @@ def create_app(database_url: str | None = None, create_schema: bool = False) -> 
     async def open_session(request: Request):
         if request.method == "OPTIONS":
             return HTTPResponse(status=204)
+        if request.path != "/api/v1/health":  # monitoring dostępności nie podlega limitom
+            wait = request.app.ctx.limiter.check_api(client_ip(request))
+            if wait:
+                raise ApiError("Zbyt wiele żądań, spróbuj ponownie za chwilę", 429, headers={"Retry-After": str(wait)})
         request.ctx.db = request.app.ctx.sessionmaker()
 
     @app.on_response
@@ -94,7 +111,7 @@ def create_app(database_url: str | None = None, create_schema: bool = False) -> 
         errors = getattr(exc, "errors", None)
         if errors:  # 422: lista błędów per pole, np. {"field": "calculation.purchase_price", "message": "..."}
             body["errors"] = errors
-        return json_response(body, status=exc.status_code)
+        return json_response(body, status=exc.status_code, headers=getattr(exc, "headers", None) or None)
 
     @app.exception(Exception)
     async def unexpected(request: Request, exc: Exception):

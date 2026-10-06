@@ -42,6 +42,10 @@ Kontener wykonuje `alembic upgrade head` przy każdym starcie.
 | `CORS_ORIGINS` | lista domen po przecinku (`*` tylko do rozwoju) |
 | `DEBUG` | `true` luzuje wymagania produkcyjne |
 | `LOG_LEVEL` | `INFO` / `DEBUG` ... |
+| `RATE_LIMIT_ENABLED` | limity żądań i blokada logowania (domyślnie `true`) |
+| `RATE_LIMIT_API_PER_MINUTE` / `RATE_LIMIT_AUTH_PER_MINUTE` | żądania na minutę z jednego IP: ogółem (300) i logowanie/rejestracja (20) |
+| `LOGIN_MAX_FAILURES` / `LOGIN_LOCK_SECONDS` | po tylu nieudanych logowaniach na konto z jednego IP (5) blokada na tyle sekund (900) |
+| `TRUST_PROXY` | `true` tylko za zaufanym reverse proxy: adres klienta z `X-Forwarded-For` |
 | `PORT` | domyślnie 8001 (w kontenerze 8000) |
 
 Pełny stack (db + api + web): `docker compose up --build` w katalogu nadrzędnym (wymaga `JWT_SECRET`).

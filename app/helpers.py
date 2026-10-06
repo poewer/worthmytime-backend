@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from . import calc
 from .budget import BudgetPlan, analyze, loan_view
+from .config import settings
 from .errors import ApiError
 from .models import Budget, BudgetLoan, Calculation, Cost, Expense, User
 from .planning import month_bounds, period_of, remaining_installments, totals_by_category
@@ -16,6 +17,15 @@ from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, LoanIn, Profil
 from .security import decode_token
 
 M = TypeVar("M", bound=BaseModel)
+
+
+def client_ip(request: Request) -> str:
+    """Adres klienta; X-Forwarded-For tylko gdy API stoi za zaufanym reverse proxy (TRUST_PROXY=true)."""
+    if settings.trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.remote_addr or request.ip
 
 
 def parse(model: type[M], request: Request) -> M:
