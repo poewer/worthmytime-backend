@@ -70,6 +70,7 @@ Kontener wykonuje `alembic upgrade head` przy każdym starcie.
 | `RATE_LIMIT_API_PER_MINUTE` / `RATE_LIMIT_AUTH_PER_MINUTE` | żądania na minutę z jednego IP: ogółem (300) i logowanie/rejestracja (20) |
 | `LOGIN_MAX_FAILURES` / `LOGIN_LOCK_SECONDS` | po tylu nieudanych logowaniach na konto z jednego IP (5) blokada na tyle sekund (900) |
 | `TRUST_PROXY` | `true` tylko za zaufanym reverse proxy: adres klienta z `X-Forwarded-For` |
+| `COOKIE_SAMESITE` / `COOKIE_SECURE` / `COOKIE_DOMAIN` | cookie sesji (`wmt_session`, HttpOnly): `lax` przy froncie i API na tej samej stronie, `none` przy różnych domenach (wymaga HTTPS); `COOKIE_SECURE` domyślnie włączone poza `DEBUG` |
 | `PORT` | domyślnie 8001 (w kontenerze 8000) |
 
 Pełny stack (db + api + web): `docker compose up --build` w katalogu nadrzędnym (wymaga `JWT_SECRET`).
@@ -81,3 +82,7 @@ Skrypty kopii zapasowej, test odtworzenia i monitoring `/health`: [ops/README.md
 ## Kwoty i zaokrąglenia
 
 Zaokrąglamy w jednym miejscu (`app/money.py`): **ROUND_HALF_UP** na zapisie dziesiętnym (2,675 daje 2,68, a 2,5 daje 3; wbudowane `round()` zaokrągla do parzystej i myli się na liczbach binarnych). Kwoty w bazie to `NUMERIC(14,2)`, stawka godzinowa `NUMERIC(14,4)`; w API nadal są zwykłymi liczbami JSON. Kwoty z żądań są zaokrąglane do groszy przed walidacją.
+
+## Sesja w cookie i CSRF
+
+Logowanie i rejestracja ustawiają cookie `wmt_session` (JWT, HttpOnly) oraz `wmt_csrf` (odczytywalne dla JS). Żądania zmieniające dane (`POST/PUT/DELETE`) uwierzytelnione cookie muszą odesłać wartość `wmt_csrf` w nagłówku `X-CSRF-Token` (inaczej 403). Nagłówek `Authorization: Bearer` nadal działa i nie wymaga CSRF (klienci API). `POST /auth/logout` czyści cookie, a `POST /auth/session` wymienia ważny token Bearer na cookie (migracja z localStorage). CORS z `credentials` działa tylko dla domen z `CORS_ORIGINS`, nigdy dla `*`; przeglądarka z frontendu musi wysyłać żądania z `credentials: "include"`.
