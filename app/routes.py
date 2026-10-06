@@ -2,7 +2,7 @@ import secrets
 
 from sanic import Blueprint, Request
 from sanic.response import empty
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from . import calc
@@ -28,6 +28,7 @@ from .helpers import (
     user_profile,
 )
 from .models import Budget, BudgetLoan, Calculation, User
+from .pagination import encode_cursor, escape_like, parse_list_params
 from .planning import period_of, remaining_installments
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
 from .security import create_token, hash_password, verify_password
@@ -37,7 +38,7 @@ bp = Blueprint("api", url_prefix="/api/v1")
 
 @bp.options("/<path:path>")
 async def preflight(request: Request, path: str):
-    # nagłówki CORS dokłada middleware on_response
+    # nagĹ‚Ăłwki CORS dokĹ‚ada middleware on_response
     return empty(204)
 
 
@@ -63,7 +64,7 @@ async def register(request: Request):
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise ApiError("Konto z tym adresem e-mail już istnieje", 409)
+        raise ApiError("Konto z tym adresem e-mail juĹĽ istnieje", 409)
     return ok({"token": create_token(user.id), "profile": user_profile(user)}, 201)
 
 
@@ -72,7 +73,7 @@ async def login(request: Request):
     data = parse(Credentials, request)
     user = await request.ctx.db.scalar(select(User).where(User.email == data.email.lower()))
     if user is None or not verify_password(data.password, user.password_hash):
-        raise ApiError("Nieprawidłowy e-mail lub hasło", 401)
+        raise ApiError("NieprawidĹ‚owy e-mail lub hasĹ‚o", 401)
     return ok({"token": create_token(user.id), "profile": user_profile(user)})
 
 
@@ -152,11 +153,11 @@ async def _require_user(request: Request) -> User:
     return user
 
 
-# ---------- budżet ----------
+# ---------- budĹĽet ----------
 
 
 async def _plan_for(request: Request, user: User):
-    """Plan budżetu użytkownika liczony od jego aktualnego dochodu (budżet jest "na żywo")."""
+    """Plan budĹĽetu uĹĽytkownika liczony od jego aktualnego dochodu (budĹĽet jest "na ĹĽywo")."""
     return await load_plan(request, user, rate_from_user(user).monthly_income)
 
 
@@ -201,8 +202,8 @@ async def put_budget(request: Request):
         request.ctx.db.add(row)
     for cat in CATEGORIES:
         setattr(row, f"pct_{cat.value.lower()}", data.percentages[cat])
-    period = period_of(today())  # wydane w kategoriach liczy rejestr wydatków, nie ten formularz
-    # lista kredytów jest zastępowana w całości (jak w formularzu: zapis całego planu)
+    period = period_of(today())  # wydane w kategoriach liczy rejestr wydatkĂłw, nie ten formularz
+    # lista kredytĂłw jest zastÄ™powana w caĹ‚oĹ›ci (jak w formularzu: zapis caĹ‚ego planu)
     db = request.ctx.db
     for old in await load_loans(request, user):
         await db.delete(old)
@@ -212,7 +213,7 @@ async def put_budget(request: Request):
             position=i,
             name=loan.name,
             installment_amount=loan.installment_amount,
-            # migawka liczby rat na dziś (przy podanej dacie końca liczy się ona dynamicznie)
+            # migawka liczby rat na dziĹ› (przy podanej dacie koĹ„ca liczy siÄ™ ona dynamicznie)
             installments_left=loan.installments_left
             or remaining_installments(today(), None, loan.end_date, loan.payment_day),
             start_date=loan.start_date,
@@ -231,7 +232,7 @@ async def put_budget(request: Request):
     )
 
 
-# ---------- historia obliczeń ----------
+# ---------- historia obliczeĹ„ ----------
 
 
 async def _own_calc(request: Request, user: User, calc_id: str) -> Calculation:
@@ -265,13 +266,42 @@ async def save_calculation(request: Request):
 @bp.get("/calculations")
 @login_required
 async def list_calculations(request: Request):
-    rows = await request.ctx.db.scalars(
-        select(Calculation)
-        .where(Calculation.user_id == request.ctx.user.id)
-        .order_by(Calculation.created_at.desc())
+    """Historia z paginacjÄ…: ?limit=&cursor=&q=&type=&category=&sort=created_desc|created_asc|name_asc|name_desc."""
+    params = parse_list_params({k: v[0] for k, v in request.args.items()})
+    user = request.ctx.user
+
+    where = [Calculation.user_id == user.id]
+    if params.q:
+        where.append(Calculation.name.ilike(f"%{escape_like(params.q)}%", escape="\\"))
+    if params.type:
+        where.append(Calculation.type == params.type)
+    if params.category:
+        where.append(Calculation.category == params.category)
+
+    order = {
+        "created_desc": (Calculation.created_at.desc(), Calculation.id),
+        "created_asc": (Calculation.created_at.asc(), Calculation.id),
+        "name_asc": (func.lower(Calculation.name).asc(), Calculation.created_at.desc(), Calculation.id),
+        "name_desc": (func.lower(Calculation.name).desc(), Calculation.created_at.desc(), Calculation.id),
+    }[params.sort]
+
+    db = request.ctx.db
+    total = await db.scalar(select(func.count()).select_from(Calculation).where(*where))
+    rows = list(
+        await db.scalars(
+            select(Calculation).where(*where).order_by(*order).offset(params.offset).limit(params.limit + 1)
+        )
     )
-    plan = await _plan_for(request, request.ctx.user)
-    return ok({"items": [serialize_calc(c, plan=plan) for c in rows]})
+    has_more = len(rows) > params.limit
+    rows = rows[: params.limit]
+    plan = await _plan_for(request, user)
+    return ok(
+        {
+            "items": [serialize_calc(c, plan=plan) for c in rows],
+            "total": total,
+            "next_cursor": encode_cursor(params.offset + params.limit) if has_more else None,
+        }
+    )
 
 
 @bp.get("/calculations/<calc_id:str>")
@@ -288,7 +318,7 @@ async def update_calculation(request: Request, calc_id: str):
     data = parse(CalculationIn, request)
     user = request.ctx.user
     c = await _own_calc(request, user, calc_id)
-    # edycja przelicza wynik według aktualnego profilu
+    # edycja przelicza wynik wedĹ‚ug aktualnego profilu
     rate = rate_from_user(user)
     c.currency, c.hourly_rate, c.net_income = user.currency, rate.hourly_rate, rate.monthly_income
     c.hours_per_day, c.days_per_week = rate.hours_per_day, rate.days_per_week
@@ -328,7 +358,7 @@ async def duplicate_calculation(request: Request, calc_id: str):
     return ok(serialize_calc(copy, plan=await _plan_for(request, request.ctx.user)), 201)
 
 
-# ---------- udostępnianie ----------
+# ---------- udostÄ™pnianie ----------
 
 
 @bp.post("/calculations/<calc_id:str>/share")
@@ -354,7 +384,7 @@ async def unshare(request: Request, calc_id: str):
 async def shared(request: Request, public_id: str):
     c = await request.ctx.db.scalar(select(Calculation).where(Calculation.public_id == public_id))
     if c is None:
-        raise ApiError("Nie znaleziono udostępnionego wyniku", 404)
+        raise ApiError("Nie znaleziono udostÄ™pnionego wyniku", 404)
     return ok(serialize_calc(c, public=True))
 
 
