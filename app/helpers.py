@@ -12,7 +12,7 @@ from .budget import BudgetPlan, analyze, loan_view
 from .errors import ApiError
 from .models import Budget, BudgetLoan, Calculation, Cost, Expense, User
 from .planning import month_bounds, period_of, totals_by_category
-from .schemas import CATEGORIES, BudgetIn, CalculationIn, Category, CostIn, LoanIn, ProfileIn
+from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, LoanIn, ProfileIn
 from .security import decode_token
 
 M = TypeVar("M", bound=BaseModel)
@@ -189,12 +189,6 @@ def plan_from_input(budget: BudgetIn | None, monthly_income: float) -> BudgetPla
     )
 
 
-def manual_spent(row: Budget | None, period: str | None) -> dict[Category, float]:
-    """Ręczne kwoty "wydane" obowiązują tylko w miesiącu, w którym je wpisano (po zmianie miesiąca wygasają)."""
-    valid = row is not None and (row.spent_period is None or period is None or row.spent_period == period)
-    return {c: (getattr(row, f"spent_{c.value.lower()}") if valid else 0.0) for c in CATEGORIES}
-
-
 def plan_from_row(
     row: Budget | None,
     monthly_income: float,
@@ -202,11 +196,10 @@ def plan_from_row(
     ledger: dict[str, float] | None = None,
     period: str | None = None,
 ) -> BudgetPlan:
-    """Wydane w kategorii = ręczna kwota z bieżącego miesiąca + suma wpisów z rejestru wydatków."""
+    """Wydane w kategorii = suma wpisów z rejestru wydatków w bieżącym miesiącu (jedyne źródło "wydane")."""
     loans = loans or []
     ledger = ledger or {}
-    manual = manual_spent(row, period)
-    spent = {c: round(manual[c] + ledger.get(c.value, 0.0), 2) for c in CATEGORIES}
+    spent = {c: round(ledger.get(c.value, 0.0), 2) for c in CATEGORIES}
     if row is None:
         # kredyty i wpisy z rejestru obowiązują także bez ustawionych procentów - to realne liczby
         return BudgetPlan(monthly_income=monthly_income, spent=spent, **_loan_totals(loans))
@@ -263,7 +256,6 @@ def serialize_budget(
     loans = loans or []
     ledger = ledger or {}
     plan = plan_from_row(row, monthly_income or 0.0, loans, ledger, period)
-    manual = manual_spent(row, period)
     return {
         "loans": [
             {
@@ -276,10 +268,8 @@ def serialize_budget(
         "loans_income_percent": round(plan.monthly_loans / monthly_income * 100, 1) if monthly_income else None,
         "last_installment_in_months": plan.last_installment_in_months,
         "percentages": {c.value: plan.percentages[c] for c in CATEGORIES},
-        # "spent" = ręczna kwota z bieżącego miesiąca (to edytuje formularz); razem z rejestrem w "spent_total"
-        "spent": {c.value: manual[c] for c in CATEGORIES},
-        "ledger": {c.value: ledger.get(c.value, 0.0) for c in CATEGORIES},
-        "spent_total": {c.value: plan.spent[c] for c in CATEGORIES},
+        # wydane w kategoriach pochodzą wyłącznie z rejestru wydatków (bieżący miesiąc)
+        "spent": {c.value: plan.spent[c] for c in CATEGORIES},
         "amounts": {c.value: plan.category_budget(c) for c in CATEGORIES} if monthly_income else None,
         "available": {c.value: plan.available(c) for c in CATEGORIES} if monthly_income else None,
         "monthly_income": round(monthly_income, 2) if monthly_income else None,

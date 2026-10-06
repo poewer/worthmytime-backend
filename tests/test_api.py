@@ -145,9 +145,16 @@ def test_budget_endpoints_and_saved_calculation_analysis(client):
     _, res = client.put("/api/v1/budget", json=bad, headers=auth)
     assert res.status == 422
 
-    good = {"percentages": {"NEEDS": 40, "FUTURE": 25, "GOALS": 15, "FUN": 20}, "spent": {"FUN": 1500}}
+    good = {"percentages": {"NEEDS": 40, "FUTURE": 25, "GOALS": 15, "FUN": 20}}
     _, res = client.put("/api/v1/budget", json=good, headers=auth)
     assert res.json["amounts"]["FUN"] == 2000 and res.json["is_custom"] is True
+
+    # wydane pochodzą wyłącznie z rejestru wydatków; "spent" w PUT /budget jest ignorowane
+    client.put("/api/v1/budget", json={**good, "spent": {"FUN": 999}}, headers=auth)
+    _, res = client.get("/api/v1/budget", headers=auth)
+    assert res.json["spent"]["FUN"] == 0
+    _, res = client.post("/api/v1/expenses", json={"category": "FUN", "amount": 1500}, headers=auth)
+    expense_id = res.json["id"]
 
     _, res = client.post(
         "/api/v1/calculations",
@@ -160,8 +167,9 @@ def test_budget_endpoints_and_saved_calculation_analysis(client):
     assert res.json["result"]["budget"]["fits_budget"] is False  # 1500 + 800 > 2000
 
     # zmiana budżetu od razu zmienia ocenę zapisanego obliczenia
-    client.put("/api/v1/budget", json={**good, "spent": {"FUN": 0}}, headers=auth)
-    _, res = client.get(f"/api/v1/calculations/{res.json['id']}", headers=auth)
+    calc_id = res.json["id"]
+    client.delete(f"/api/v1/expenses/{expense_id}", headers=auth)
+    _, res = client.get(f"/api/v1/calculations/{calc_id}", headers=auth)
     assert res.json["result"]["budget"]["fits_budget"] is True
 
 
@@ -171,7 +179,6 @@ def test_loans_are_saved_with_budget_and_counted_in_needs(client):
     client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
     body = {
         "percentages": {"NEEDS": 50, "FUTURE": 25, "GOALS": 15, "FUN": 10},
-        "spent": {"NEEDS": 2000},
         "loans": [
             {"name": "Kredyt gotówkowy", "installment_amount": 800, "installments_left": 36, "loan_amount": 40000},
             {"name": "Karta", "installment_amount": 400, "installments_left": 6},
@@ -179,6 +186,7 @@ def test_loans_are_saved_with_budget_and_counted_in_needs(client):
     }
     _, res = client.put("/api/v1/budget", json=body, headers=auth)
     assert res.status == 200
+    client.post("/api/v1/expenses", json={"category": "NEEDS", "amount": 2000}, headers=auth)
     assert res.json["monthly_loans"] == 1200 and res.json["loans_income_percent"] == 12.0
     first = res.json["loans"][0]
     assert first["remaining_to_pay"] == 28800 and first["remaining_work_hours"] > 0
@@ -204,7 +212,7 @@ def test_expense_ledger_feeds_budget_and_summary(client):
     auth = _register(client, "ledger@b.pl")
     client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
     pct = {"NEEDS": 50, "FUTURE": 25, "GOALS": 15, "FUN": 10}
-    client.put("/api/v1/budget", json={"percentages": pct, "spent": {"FUN": 100}}, headers=auth)
+    client.put("/api/v1/budget", json={"percentages": pct}, headers=auth)
 
     _, res = client.post("/api/v1/expenses", json={"category": "FUN", "amount": 200, "note": "kino"}, headers=auth)
     assert res.status == 201
@@ -213,13 +221,11 @@ def test_expense_ledger_feeds_budget_and_summary(client):
     assert res.json["total"] == 200 and res.json["totals"]["FUN"] == 200 and len(res.json["items"]) == 1
 
     _, res = client.get("/api/v1/budget", headers=auth)
-    assert res.json["spent"]["FUN"] == 100  # ręczna część, edytowana w formularzu
-    assert res.json["ledger"]["FUN"] == 200
-    assert res.json["spent_total"]["FUN"] == 300
+    assert res.json["spent"]["FUN"] == 200  # wydane = tylko rejestr wydatków
 
     body = {"calculation": {"name": "Gra", "purchase_price": 500, "category": "FUN"}}
     _, res = client.post("/api/v1/calculate", json=body, headers=auth)
-    assert res.json["budget"]["spent"] == 300 and res.json["budget"]["available"] == 700
+    assert res.json["budget"]["spent"] == 200 and res.json["budget"]["available"] == 800
 
     _, res = client.get("/api/v1/expenses/summary?months=3", headers=auth)
     assert len(res.json["months"]) == 3 and res.json["months"][-1]["totals"]["FUN"] == 200
@@ -232,6 +238,57 @@ def test_expense_ledger_feeds_budget_and_summary(client):
     assert client.delete(f"/api/v1/expenses/{expense_id}", headers=auth)[1].status == 200
     _, res = client.get("/api/v1/expenses", headers=auth)
     assert res.json["total"] == 0
+
+
+def test_max_monthly_contribution_from_category_availability(client):
+    auth = _register(client, "contrib@b.pl")
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+    client.post("/api/v1/expenses", json={"category": "FUN", "amount": 200}, headers=auth)  # FUN: 1 000 - 200 = 800
+
+    def calc(**extra):
+        body = {"calculation": {"name": "Konsola", "purchase_price": 3200, "category": "FUN", **extra}}
+        return client.post("/api/v1/calculate", json=body, headers=auth)[1].json["budget"]
+
+    b = calc()  # bez własnej wpłaty: automatycznie maksimum z kategorii
+    assert b["upfront"]["max_monthly_contribution"] == 800
+    assert b["upfront"]["monthly_contribution"] == 800 and b["upfront"]["contribution_source"] == "CATEGORY_AVAILABLE"
+    assert b["upfront"]["months_to_goal"] == 4.0
+
+    ok_plan = calc(monthly_contribution=500)  # w ramach maksimum: odkładanie w czasie mieści się w budżecie
+    assert ok_plan["fits_budget"] is True and ok_plan["upfront"]["contribution_source"] == "USER"
+    assert "CATEGORY_BUDGET_EXCEEDED" not in {w["code"] for w in ok_plan["warnings"]}
+
+    too_much = calc(monthly_contribution=1000)
+    assert too_much["fits_budget"] is False
+    w = next(w for w in too_much["warnings"] if w["code"] == "CONTRIBUTION_EXCEEDS_AVAILABLE")
+    assert w["params"]["max_monthly"] == 800 and w["params"]["overrun"] == 200
+
+
+def test_goal_in_category_gets_max_contribution_shared_with_other_goals(client):
+    auth = _register(client, "goalcat@b.pl")
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+    client.post("/api/v1/expenses", json={"category": "FUN", "amount": 200}, headers=auth)  # wolne 800
+
+    goal = {"name": "Konsola", "target_amount": 3200, "category": "FUN"}
+    _, res = client.post("/api/v1/goals", json=goal, headers=auth)
+    g = res.json
+    assert g["max_monthly_contribution"] == 800 and g["effective_contribution"] == 800
+    assert g["contribution_source"] == "CATEGORY_AVAILABLE" and g["months_to_goal"] == 4.0
+
+    bike = {"name": "Rower", "target_amount": 2000, "category": "FUN", "monthly_contribution": 500}
+    _, res = client.post("/api/v1/goals", json=bike, headers=auth)
+    assert res.json["contribution_exceeds"] is False
+    _, res = client.get("/api/v1/goals", headers=auth)
+    by_name = {x["name"]: x for x in res.json["items"]}
+    # Rower zarezerwował 500, więc na Konsolę zostaje 300 (wolne 800 - 500)
+    assert by_name["Konsola"]["max_monthly_contribution"] == 300
+    assert by_name["Konsola"]["months_to_goal"] == round(3200 / 300, 1)
+    # Konsola nie ma własnej wpłaty, więc nie blokuje limitu Roweru
+    assert by_name["Rower"]["max_monthly_contribution"] == 800
+
+    too_big = {**bike, "name": "Motor", "monthly_contribution": 900}
+    _, res = client.post("/api/v1/goals", json=too_big, headers=auth)
+    assert res.json["contribution_exceeds"] is True  # 900 > 800 - 500 (Rower)
 
 
 def test_wishlist_cooldown_decision_and_savings(client):

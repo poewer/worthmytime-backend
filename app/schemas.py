@@ -139,6 +139,7 @@ class GoalIn(BaseModel):
     saved_amount: float = Field(default=0, ge=0)
     monthly_contribution: float | None = Field(default=None, gt=0)
     target_date: date | None = None
+    category: Category | None = None  # z której kategorii budżetu odkładamy (wyznacza maksymalną wpłatę)
 
 
 class DepositIn(BaseModel):
