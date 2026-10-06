@@ -178,23 +178,27 @@ def test_no_obligations_block_without_loans():
     assert analyze(calc(10), plan())["obligations"] is None
 
 
-def test_manual_spent_expires_after_month_change():
-    from app.helpers import manual_spent, plan_from_row
+def test_spent_comes_only_from_ledger_not_from_manual_columns():
+    from app.helpers import plan_from_row
     from app.models import Budget
 
-    row = Budget(
-        user_id="u", spent_fun=300.0, spent_needs=0.0, spent_future=0.0, spent_goals=0.0, spent_period="2026-09"
-    )
+    row = Budget(user_id="u", spent_fun=300.0, spent_needs=0.0, spent_future=0.0, spent_goals=0.0)
     row.pct_needs, row.pct_future, row.pct_goals, row.pct_fun = 50.0, 25.0, 15.0, 10.0
-    assert manual_spent(row, "2026-09")[Category.FUN] == 300.0
-    assert manual_spent(row, "2026-10")[Category.FUN] == 0.0  # nowy miesiąc: ręczna kwota wygasa
-    assert manual_spent(row, None)[Category.FUN] == 300.0
-    row.spent_period = None  # stare wiersze sprzed rejestru nie tracą kwot
-    assert manual_spent(row, "2026-10")[Category.FUN] == 300.0
-
     p = plan_from_row(row, 10000.0, ledger={"FUN": 150.0}, period="2026-10")
-    assert p.spent[Category.FUN] == 450.0  # 300 ręcznie (okres null) + 150 z rejestru
+    assert p.spent[Category.FUN] == 150.0  # stara ręczna kwota (300) nie jest już liczona
 
+
+def test_contribution_rules():
+    from app.budget import rule_contribution_exceeds_available, rule_no_free_budget
+
+    assert rule_contribution_exceeds_available(Category.FUN, None, 800) is None
+    assert rule_contribution_exceeds_available(Category.FUN, 800, 800) is None
+    w = rule_contribution_exceeds_available(Category.FUN, 1000, 800)
+    assert w["params"]["overrun"] == 200 and w["level"] == "warning"
+    assert rule_contribution_exceeds_available(Category.NEEDS, 5000, 800)["level"] == "critical"
+    assert rule_contribution_exceeds_available(Category.FUN, 100, -50)["params"]["max_monthly"] == 0.0
+    assert rule_no_free_budget(Category.FUN, 0, True)["code"] == "NO_FREE_BUDGET"
+    assert rule_no_free_budget(Category.FUN, 10, True) is None
 
 def test_loan_view_derived_values():
     v = loan_view("Kredyt", 800, 36, 40000, plan(), hourly_rate=50)

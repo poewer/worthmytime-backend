@@ -161,6 +161,7 @@ class SavingsGoal(Base):
     target_amount: Mapped[float] = mapped_column(Float)
     saved_amount: Mapped[float] = mapped_column(Float, default=0.0)
     monthly_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
+    category: Mapped[str | None] = mapped_column(String(10), nullable=True)
     target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

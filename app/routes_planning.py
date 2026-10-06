@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from . import calc
 from .errors import ApiError
-from .helpers import login_required, ok, parse, rate_from_user, today
+from .helpers import load_plan, login_required, ok, parse, rate_from_user, today
 from .models import Expense, SavingsGoal, User, WishlistItem
 from .planning import (
     goal_view,
@@ -20,7 +20,7 @@ from .planning import (
     wish_stats,
     wish_view,
 )
-from .schemas import DecisionIn, DepositIn, ExpenseIn, GoalIn, WishIn
+from .schemas import Category, DecisionIn, DepositIn, ExpenseIn, GoalIn, WishIn
 
 bp = Blueprint("planning", url_prefix="/api/v1")
 
@@ -214,24 +214,64 @@ async def delete_wish(request: Request, item_id: str):
 # ---------- cele oszczędnościowe ----------
 
 
-def _goal(g: SavingsGoal, hourly_rate: float | None) -> dict:
+def _goal(g: SavingsGoal, hourly_rate: float | None, capacity: dict[str, float] | None = None) -> dict:
+    """capacity: wolne środki kategorii pomniejszone o wpłaty innych celów z tej samej kategorii."""
+    max_monthly = None
+    if g.category and capacity is not None and g.category in capacity:
+        max_monthly = round(max(capacity[g.category], 0.0), 2)
+    # bez własnej wpłaty zakładamy maksimum, na jakie pozwala budżet kategorii
+    contribution = g.monthly_contribution if g.monthly_contribution is not None else max_monthly
     return {
         "id": g.id,
         "name": g.name,
+        "category": g.category,
         "target_amount": g.target_amount,
         "saved_amount": g.saved_amount,
         "monthly_contribution": g.monthly_contribution,
+        "effective_contribution": contribution,
+        "max_monthly_contribution": max_monthly,
+        "contribution_source": (
+            "USER"
+            if g.monthly_contribution is not None
+            else ("CATEGORY_AVAILABLE" if max_monthly is not None else None)
+        ),
+        "contribution_exceeds": bool(
+            g.monthly_contribution is not None and max_monthly is not None and g.monthly_contribution > max_monthly
+        ),
         "target_date": g.target_date.isoformat() if g.target_date else None,
         "created_at": g.created_at.isoformat(),
         **goal_view(
             target_amount=g.target_amount,
             saved_amount=g.saved_amount,
-            monthly_contribution=g.monthly_contribution,
+            monthly_contribution=contribution if contribution else None,
             target_date=g.target_date,
             today=today(),
             hourly_rate=hourly_rate,
         ),
     }
+
+
+async def _capacity(request: Request, user: User, goals: list[SavingsGoal]) -> dict[str, dict[str, float]] | None:
+    """Dla każdego celu: ile można miesięcznie przeznaczyć z jego kategorii (wolne środki - wpłaty innych celów)."""
+    if user.hourly_rate is None and user.monthly_income is None:
+        return None
+    plan = await load_plan(request, user, rate_from_user(user).monthly_income)
+    out: dict[str, dict[str, float]] = {}
+    for g in goals:
+        if not g.category:
+            continue
+        others = sum(
+            o.monthly_contribution or 0.0
+            for o in goals
+            if o.id != g.id and o.category == g.category and o.completed_at is None
+        )
+        out[g.id] = {g.category: plan.available(Category(g.category)) - others}
+    return out
+
+async def _single_goal(request: Request, user: User, g: SavingsGoal) -> dict:
+    rows = await request.ctx.db.scalars(select(SavingsGoal).where(SavingsGoal.user_id == user.id))
+    caps = await _capacity(request, user, list(rows))
+    return _goal(g, _hourly_rate(user), (caps or {}).get(g.id))
 
 
 def _hourly_rate(user: User) -> float | None:
@@ -256,7 +296,11 @@ async def list_goals(request: Request):
     rows = await request.ctx.db.scalars(
         select(SavingsGoal).where(SavingsGoal.user_id == user.id).order_by(SavingsGoal.created_at.desc())
     )
-    return ok({"items": [_goal(g, rate) for g in rows], "currency": user.currency})
+    goals = list(rows)
+    caps = await _capacity(request, user, goals)
+    return ok(
+        {"items": [_goal(g, rate, (caps or {}).get(g.id)) for g in goals], "currency": user.currency}
+    )
 
 
 @bp.post("/goals")
@@ -268,7 +312,7 @@ async def add_goal(request: Request):
     _sync_completion(g)
     request.ctx.db.add(g)
     await request.ctx.db.commit()
-    return ok(_goal(g, _hourly_rate(user)), 201)
+    return ok(await _single_goal(request, user, g), 201)
 
 
 @bp.put("/goals/<goal_id:str>")
@@ -281,7 +325,7 @@ async def update_goal(request: Request, goal_id: str):
         setattr(g, key, value)
     _sync_completion(g)
     await request.ctx.db.commit()
-    return ok(_goal(g, _hourly_rate(user)))
+    return ok(await _single_goal(request, user, g))
 
 
 @bp.post("/goals/<goal_id:str>/deposit")
@@ -295,7 +339,7 @@ async def deposit(request: Request, goal_id: str):
     g.saved_amount = round(g.saved_amount + data.amount, 2)
     _sync_completion(g)
     await request.ctx.db.commit()
-    return ok(_goal(g, _hourly_rate(user)))
+    return ok(await _single_goal(request, user, g))
 
 
 @bp.delete("/goals/<goal_id:str>")

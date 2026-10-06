@@ -201,9 +201,7 @@ async def put_budget(request: Request):
         request.ctx.db.add(row)
     for cat in CATEGORIES:
         setattr(row, f"pct_{cat.value.lower()}", data.percentages[cat])
-        setattr(row, f"spent_{cat.value.lower()}", data.spent[cat])
-    period = period_of(today())
-    row.spent_period = period  # ręczne kwoty dotyczą bieżącego miesiąca
+    period = period_of(today())  # wydane w kategoriach liczy rejestr wydatków, nie ten formularz
     # lista kredytów jest zastępowana w całości (jak w formularzu: zapis całego planu)
     db = request.ctx.db
     for old in await load_loans(request, user):

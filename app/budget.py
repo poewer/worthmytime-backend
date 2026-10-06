@@ -160,6 +160,31 @@ def rule_loans_exceed_needs(plan: BudgetPlan) -> dict | None:
     )
 
 
+def rule_contribution_exceeds_available(
+    category: Category, planned: float | None, available: float
+) -> dict | None:
+    """CONTRIBUTION_EXCEEDS_AVAILABLE: planowana miesięczna wpłata jest większa niż wolne środki kategorii."""
+    maximum = max(available, 0.0)
+    if planned is None or planned <= maximum:
+        return None
+    level = WARNING if category in LOW_PRIORITY else CRITICAL
+    return warning(
+        "CONTRIBUTION_EXCEEDS_AVAILABLE",
+        level,
+        category=category.value,
+        planned=round(planned, 2),
+        max_monthly=round(maximum, 2),
+        overrun=round(planned - maximum, 2),
+    )
+
+
+def rule_no_free_budget(category: Category, available: float, has_goal: bool) -> dict | None:
+    """NO_FREE_BUDGET: w kategorii nie zostało nic wolnego, więc nie ma z czego odkładać w tym miesiącu."""
+    if not has_goal or available > 0:
+        return None
+    return warning("NO_FREE_BUDGET", WARNING, category=category.value, available=round(available, 2))
+
+
 def rule_no_budget_data(plan: BudgetPlan) -> dict | None:
     """NO_BUDGET_DATA: użytkownik nie ustawił budżetu - wynik opiera się na założeniach domyślnych."""
     return None if plan.is_custom else warning("NO_BUDGET_DATA", INFO)
@@ -231,7 +256,10 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
 
     if costs.upfront > 0:
         projected = round(spent + costs.upfront, 2)
-        contribution = calc.monthly_contribution or budget
+        # ile maksymalnie można miesięcznie przeznaczyć na ten wydatek: wolne środki kategorii w tym miesiącu
+        max_monthly = round(max(available, 0.0), 2)
+        planned = calc.monthly_contribution  # plan użytkownika; bez niego zakładamy maksimum
+        contribution = planned if planned is not None else max_monthly
         result["upfront"] = {
             "cost": costs.upfront,
             "projected_spent": projected,
@@ -243,6 +271,8 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
             if contribution > 0
             else None,
             "monthly_contribution": round(contribution, 2),
+            "max_monthly_contribution": max_monthly,
+            "contribution_source": "USER" if planned is not None else "CATEGORY_AVAILABLE",
             "already_saved": calc.already_saved,
             "income_percent": _pct(costs.upfront, plan.monthly_income),
         }
@@ -256,10 +286,15 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
             "income_percent": _pct(costs.monthly, plan.monthly_income),
         }
 
+    # Z planem odkładania (miesięczna wpłata) liczy się wpłata względem wolnych środków kategorii,
+    # a nie cały zakup naraz; bez planu sprawdzamy zakup jednorazowy.
+    saving_over_time = costs.upfront > 0 and calc.monthly_contribution is not None
     exceeded = [
         w
         for w in (
-            rule_upfront_exceeds_category(category, budget, spent, costs.upfront),
+            rule_contribution_exceeds_available(category, calc.monthly_contribution, available)
+            if saving_over_time
+            else rule_upfront_exceeds_category(category, budget, spent, costs.upfront),
             rule_monthly_exceeds_category(category, budget, spent, costs.monthly),
         )
         if w
@@ -269,6 +304,7 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
         rule_higher_priority_at_risk(category, exceeded),
         rule_budget_deficit(plan, costs.upfront, costs.monthly),
         rule_loans_exceed_needs(plan),
+        rule_no_free_budget(category, available, saving_over_time or costs.upfront > 0),
         None if exceeded else rule_category_tight(category, budget, spent, costs.upfront, costs.monthly),
         rule_no_budget_data(plan),
     ]
