@@ -14,6 +14,8 @@ uv run python -m pytest          # SQLite; TEST_DATABASE_URL=... uruchamia testy
 
 ## Migracje (Alembic)
 
+> Na Windowsie `uv run alembic ...` bywa blokowane ("Failed to spawn ... Odmowa dostępu"), bo system nie pozwala uruchamiać plików `.exe` z `.venv\Scripts`. Użyj wtedy `uv run python -m alembic ...` (albo `.\.venv\Scripts\python.exe -m alembic ...`). To samo dotyczy `pytest` i `ruff`.
+
 Schemat zarządzany jest wyłącznie migracjami; aplikacja przy starcie tylko sprawdza, czy tabele istnieją.
 
 ```powershell
