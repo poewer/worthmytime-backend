@@ -1,11 +1,11 @@
-﻿# ruff: noqa: F811
+# ruff: noqa: F811
 from tests.test_api import PROFILE, _register, client  # noqa: F401  (fixture client)
 
 PASSWORD = "supersecret1"
 
 
 def _seed(client, auth):
-    """Dane w kaĹĽdej tabeli uĹĽytkownika: obliczenie z linkiem, budĹĽet, kredyt, wydatek, ĹĽyczenie, cel."""
+    """Dane w każdej tabeli użytkownika: obliczenie z linkiem, budżet, kredyt, wydatek, życzenie, cel."""
     client.put("/api/v1/profile", json=PROFILE, headers=auth)
     _, res = client.post("/api/v1/calculations", json={"name": "Rower", "purchase_price": 3000}, headers=auth)
     cid = res.json["id"]
@@ -56,7 +56,7 @@ def test_delete_account_removes_everything_including_public_link(client):
     assert client.get(f"/api/v1/shared/{pid}")[1].status == 404
     assert client.get("/api/v1/auth/me", headers=auth)[1].status == 401
     assert client.post("/api/v1/auth/login", json={"email": "del@b.pl", "password": PASSWORD})[1].status == 401
-    # konto moĹĽna zaĹ‚oĹĽyÄ‡ ponownie, a cudze dane zostajÄ… nietkniÄ™te
+    # konto można założyć ponownie, a cudze dane zostają nietknięte
     assert client.post("/api/v1/auth/register", json={"email": "del@b.pl", "password": PASSWORD})[1].status == 201
     _, res = client.get("/api/v1/expenses", headers=other)
     assert len(res.json["items"]) == 1

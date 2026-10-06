@@ -1,4 +1,4 @@
-﻿from sanic import Request, Sanic
+from sanic import Request, Sanic
 from sanic.exceptions import SanicException
 from sanic.response import HTTPResponse
 from sanic.response import json as json_response
@@ -18,7 +18,7 @@ log = setup_logging()
 
 def create_app(database_url: str | None = None, create_schema: bool = False) -> Sanic:
     log.info(
-        "Start aplikacji (tryb: %s, poziom logĂłw: %s, CORS: %s)",
+        "Start aplikacji (tryb: %s, poziom logów: %s, CORS: %s)",
         "DEBUG" if settings.debug else "PRODUKCJA",
         settings.log_level.upper(),
         settings.cors_origins,
@@ -39,13 +39,13 @@ def create_app(database_url: str | None = None, create_schema: bool = False) -> 
     async def setup_db(app):
         url = make_url(database_url or settings.database_url)
         safe_url = url.render_as_string(hide_password=True)
-        log.info("ĹÄ…czenie z bazÄ… danych: %s", safe_url)
+        log.info("Łączenie z bazą danych: %s", safe_url)
         engine = create_async_engine(url)
         try:
             async with engine.begin() as conn:
                 await conn.execute(text("SELECT 1"))
-                log.info("PoĹ‚Ä…czono z bazÄ… danych (%s)", url.get_backend_name())
-                if create_schema:  # tylko testy; produkcyjnie schemat zarzÄ…dzany jest przez Alembic
+                log.info("Połączono z bazą danych (%s)", url.get_backend_name())
+                if create_schema:  # tylko testy; produkcyjnie schemat zarządzany jest przez Alembic
                     await conn.run_sync(Base.metadata.create_all)
                 missing = await conn.run_sync(
                     lambda c: [t for t in Base.metadata.tables if not inspect(c).has_table(t)]
@@ -56,7 +56,7 @@ def create_app(database_url: str | None = None, create_schema: bool = False) -> 
                     )
                 log.info("Schemat bazy gotowy (tabele: %s)", ", ".join(sorted(Base.metadata.tables)))
         except Exception:
-            log.exception("Nie udaĹ‚o siÄ™ poĹ‚Ä…czyÄ‡ z bazÄ… danych: %s", safe_url)
+            log.exception("Nie udało się połączyć z bazą danych: %s", safe_url)
             await engine.dispose()
             raise
         app.ctx.engine = engine
@@ -93,14 +93,14 @@ def create_app(database_url: str | None = None, create_schema: bool = False) -> 
     async def api_error(request: Request, exc: SanicException):
         body = {"error": str(exc)}
         errors = getattr(exc, "errors", None)
-        if errors:  # 422: lista bĹ‚Ä™dĂłw per pole, np. {"field": "calculation.purchase_price", "message": "..."}
+        if errors:  # 422: lista błędów per pole, np. {"field": "calculation.purchase_price", "message": "..."}
             body["errors"] = errors
         return json_response(body, status=exc.status_code)
 
     @app.exception(Exception)
     async def unexpected(request: Request, exc: Exception):
         log.exception("Unhandled error")
-        return json_response({"error": "WewnÄ™trzny bĹ‚Ä…d serwera"}, status=500)
+        return json_response({"error": "Wewnętrzny błąd serwera"}, status=500)
 
     app.blueprint(bp)
     app.blueprint(planning_bp)
