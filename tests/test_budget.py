@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.budget import BudgetPlan, analyze, months_to_goal, rule_budget_deficit, rule_category_tight
+from app.budget import BudgetPlan, analyze, loan_view, months_to_goal, rule_budget_deficit, rule_category_tight
 from app.schemas import BudgetIn, CalculationIn, Category
 
 INCOME = 10_000.0
@@ -124,3 +124,63 @@ def test_budget_in_requires_sum_100():
     assert BudgetIn().percentages[Category.FUN] == 10
     with pytest.raises(ValueError):
         BudgetIn(percentages={"NEEDS": 60, "FUTURE": 25, "GOALS": 15, "FUN": 10})
+
+
+def loan_plan(monthly_loans: float, count: int = 1, last: int = 24, **spent) -> BudgetPlan:
+    base = plan(**spent)
+    return BudgetPlan(
+        monthly_income=INCOME,
+        spent=base.spent,
+        is_custom=True,
+        monthly_loans=monthly_loans,
+        loans_count=count,
+        last_installment_in_months=last,
+    )
+
+
+def test_loan_installments_reduce_needs_budget():
+    p = loan_plan(1200, needs=2000)
+    assert p.effective_spent(Category.NEEDS) == 3200
+    assert p.available(Category.NEEDS) == 1800  # 5 000 - 2 000 - 1 200
+    assert p.effective_spent(Category.FUN) == 0  # raty nie wpływają na inne kategorie
+    assert p.total_spent == 3200
+
+
+def test_needs_purchase_sees_loans_and_reports_obligations():
+    r = analyze(calc(2000, "NEEDS"), loan_plan(1200, needs=2000))
+    assert r["spent"] == 3200 and r["available"] == 1800
+    assert r["upfront"]["projected_spent"] == 5200  # ponad budżet 5 000
+    assert "CATEGORY_BUDGET_EXCEEDED" in codes(r)
+    assert r["obligations"] == {
+        "monthly_installments": 1200,
+        "loans_count": 1,
+        "income_percent": 12.0,
+        "last_installment_in_months": 24,
+        "included_in_category": True,
+    }
+
+
+def test_fun_purchase_not_charged_for_loans_but_deficit_counts_them():
+    # NEEDS 5 000 + FUTURE 2 500 + GOALS 1 500 = 9 000 + raty 800 = 9 800; zakup 500 -> 10 300 > 10 000
+    r = analyze(calc(500), loan_plan(800, needs=5000, future=2500, goals=1500))
+    assert r["spent"] == 0 and r["obligations"]["included_in_category"] is False
+    assert next(w for w in r["warnings"] if w["code"] == "BUDGET_DEFICIT")["params"]["deficit"] == 300
+
+
+def test_loans_exceed_needs_budget_rule():
+    r = analyze(calc(10), loan_plan(5500))
+    w = next(w for w in r["warnings"] if w["code"] == "LOANS_EXCEED_NEEDS_BUDGET")
+    assert w["level"] == "critical" and w["params"]["overrun"] == 500
+    assert "LOANS_EXCEED_NEEDS_BUDGET" not in codes(analyze(calc(10), loan_plan(4000)))
+
+
+def test_no_obligations_block_without_loans():
+    assert analyze(calc(10), plan())["obligations"] is None
+
+
+def test_loan_view_derived_values():
+    v = loan_view("Kredyt", 800, 36, 40000, plan(), hourly_rate=50)
+    assert v["remaining_to_pay"] == 28800
+    assert v["income_percent"] == 8.0
+    assert v["remaining_work_hours"] == 576.0
+    assert loan_view("x", 100, 1, None, plan(), None)["remaining_work_hours"] is None

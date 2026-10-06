@@ -165,6 +165,36 @@ def test_budget_endpoints_and_saved_calculation_analysis(client):
     assert res.json["result"]["budget"]["fits_budget"] is True
 
 
+def test_loans_are_saved_with_budget_and_counted_in_needs(client):
+    _, res = client.post("/api/v1/auth/register", json={"email": "loan@b.pl", "password": "supersecret1"})
+    auth = {"Authorization": f"Bearer {res.json['token']}"}
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+    body = {
+        "percentages": {"NEEDS": 50, "FUTURE": 25, "GOALS": 15, "FUN": 10},
+        "spent": {"NEEDS": 2000},
+        "loans": [
+            {"name": "Kredyt gotówkowy", "installment_amount": 800, "installments_left": 36, "loan_amount": 40000},
+            {"name": "Karta", "installment_amount": 400, "installments_left": 6},
+        ],
+    }
+    _, res = client.put("/api/v1/budget", json=body, headers=auth)
+    assert res.status == 200
+    assert res.json["monthly_loans"] == 1200 and res.json["loans_income_percent"] == 12.0
+    first = res.json["loans"][0]
+    assert first["remaining_to_pay"] == 28800 and first["remaining_work_hours"] > 0
+    assert res.json["last_installment_in_months"] == 36
+
+    fridge = {"name": "Lodówka", "purchase_price": 1000, "category": "NEEDS"}
+    _, res = client.post("/api/v1/calculate", json={"calculation": fridge}, headers=auth)
+    assert res.json["budget"]["spent"] == 3200  # wydatki 2 000 + raty 1 200
+    assert res.json["budget"]["obligations"]["monthly_installments"] == 1200
+
+    # zapis planu bez kredytów usuwa je
+    client.put("/api/v1/budget", json={**body, "loans": []}, headers=auth)
+    _, res = client.get("/api/v1/budget", headers=auth)
+    assert res.json["loans"] == [] and res.json["monthly_loans"] == 0
+
+
 def test_other_user_cannot_read(client):
     _, r1 = client.post("/api/v1/auth/register", json={"email": "u1@b.pl", "password": "supersecret1"})
     _, r2 = client.post("/api/v1/auth/register", json={"email": "u2@b.pl", "password": "supersecret1"})

@@ -83,6 +83,20 @@ class Cost(Base):
     calculation: Mapped[Calculation] = relationship(back_populates="costs")
 
 
+class BudgetLoan(Base):
+    """Kredyt lub pożyczka użytkownika; suma rat to zobowiązanie w kategorii NEEDS."""
+
+    __tablename__ = "budget_loans"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    name: Mapped[str] = mapped_column(String(100))
+    installment_amount: Mapped[float] = mapped_column(Float)
+    installments_left: Mapped[int] = mapped_column(Integer)
+    loan_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
 class Budget(Base):
     """Plan budżetu użytkownika: procenty kategorii i wydatki w bieżącym miesiącu."""
 
