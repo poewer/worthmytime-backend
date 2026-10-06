@@ -10,13 +10,13 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.main import create_app
 from app.models import Base
 
-# Gdy ustawione (np. w CI): testy API idÄ… na prawdziwym PostgreSQL zamiast SQLite.
-# UWAGA: schemat w tej bazie jest przed kaĹĽdym testem kasowany (drop_all) - uĹĽywaj tylko bazy testowej.
+# Gdy ustawione (np. w CI): testy API idą na prawdziwym PostgreSQL zamiast SQLite.
+# UWAGA: schemat w tej bazie jest przed każdym testem kasowany (drop_all) - używaj tylko bazy testowej.
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
 
 def _free_port() -> int:
-    """Wolny port spoza zakresu ephemeral (na Windows jego czÄ™Ĺ›Ä‡ jest zarezerwowana - bĹ‚Ä…d 10013)."""
+    """Wolny port spoza zakresu ephemeral (na Windows jego część jest zarezerwowana - błąd 10013)."""
     for _ in range(50):
         port = random.randint(30000, 39999)
         with socket.socket() as s:
@@ -25,7 +25,7 @@ def _free_port() -> int:
                 return port
             except OSError:
                 continue
-    raise RuntimeError("Brak wolnego portu do testĂłw")
+    raise RuntimeError("Brak wolnego portu do testów")
 
 
 async def _reset_schema(url: str) -> None:
@@ -149,7 +149,7 @@ def test_budget_endpoints_and_saved_calculation_analysis(client):
     _, res = client.put("/api/v1/budget", json=good, headers=auth)
     assert res.json["amounts"]["FUN"] == 2000 and res.json["is_custom"] is True
 
-    # wydane pochodzÄ… wyĹ‚Ä…cznie z rejestru wydatkĂłw; "spent" w PUT /budget jest ignorowane
+    # wydane pochodzą wyłącznie z rejestru wydatków; "spent" w PUT /budget jest ignorowane
     client.put("/api/v1/budget", json={**good, "spent": {"FUN": 999}}, headers=auth)
     _, res = client.get("/api/v1/budget", headers=auth)
     assert res.json["spent"]["FUN"] == 0
@@ -166,7 +166,7 @@ def test_budget_endpoints_and_saved_calculation_analysis(client):
     assert res.json["result"]["budget"]["available"] == 500
     assert res.json["result"]["budget"]["fits_budget"] is False  # 1500 + 800 > 2000
 
-    # zmiana budĹĽetu od razu zmienia ocenÄ™ zapisanego obliczenia
+    # zmiana budżetu od razu zmienia ocenę zapisanego obliczenia
     calc_id = res.json["id"]
     client.delete(f"/api/v1/expenses/{expense_id}", headers=auth)
     _, res = client.get(f"/api/v1/calculations/{calc_id}", headers=auth)
@@ -180,7 +180,7 @@ def test_loans_are_saved_with_budget_and_counted_in_needs(client):
     body = {
         "percentages": {"NEEDS": 50, "FUTURE": 25, "GOALS": 15, "FUN": 10},
         "loans": [
-            {"name": "Kredyt gotĂłwkowy", "installment_amount": 800, "installments_left": 36, "loan_amount": 40000},
+            {"name": "Kredyt gotówkowy", "installment_amount": 800, "installments_left": 36, "loan_amount": 40000},
             {"name": "Karta", "installment_amount": 400, "installments_left": 6},
         ],
     }
@@ -192,12 +192,12 @@ def test_loans_are_saved_with_budget_and_counted_in_needs(client):
     assert first["remaining_to_pay"] == 28800 and first["remaining_work_hours"] > 0
     assert res.json["last_installment_in_months"] == 36
 
-    fridge = {"name": "LodĂłwka", "purchase_price": 1000, "category": "NEEDS"}
+    fridge = {"name": "Lodówka", "purchase_price": 1000, "category": "NEEDS"}
     _, res = client.post("/api/v1/calculate", json={"calculation": fridge}, headers=auth)
     assert res.json["budget"]["spent"] == 3200  # wydatki 2 000 + raty 1 200
     assert res.json["budget"]["obligations"]["monthly_installments"] == 1200
 
-    # zapis planu bez kredytĂłw usuwa je
+    # zapis planu bez kredytów usuwa je
     client.put("/api/v1/budget", json={**body, "loans": []}, headers=auth)
     _, res = client.get("/api/v1/budget", headers=auth)
     assert res.json["loans"] == [] and res.json["monthly_loans"] == 0
@@ -221,7 +221,7 @@ def test_expense_ledger_feeds_budget_and_summary(client):
     assert res.json["total"] == 200 and res.json["totals"]["FUN"] == 200 and len(res.json["items"]) == 1
 
     _, res = client.get("/api/v1/budget", headers=auth)
-    assert res.json["spent"]["FUN"] == 200  # wydane = tylko rejestr wydatkĂłw
+    assert res.json["spent"]["FUN"] == 200  # wydane = tylko rejestr wydatków
 
     body = {"calculation": {"name": "Gra", "purchase_price": 500, "category": "FUN"}}
     _, res = client.post("/api/v1/calculate", json=body, headers=auth)
@@ -249,12 +249,12 @@ def test_max_monthly_contribution_from_category_availability(client):
         body = {"calculation": {"name": "Konsola", "purchase_price": 3200, "category": "FUN", **extra}}
         return client.post("/api/v1/calculate", json=body, headers=auth)[1].json["budget"]
 
-    b = calc()  # bez wĹ‚asnej wpĹ‚aty: automatycznie maksimum z kategorii
+    b = calc()  # bez własnej wpłaty: automatycznie maksimum z kategorii
     assert b["upfront"]["max_monthly_contribution"] == 800
     assert b["upfront"]["monthly_contribution"] == 800 and b["upfront"]["contribution_source"] == "CATEGORY_AVAILABLE"
     assert b["upfront"]["months_to_goal"] == 4.0
 
-    ok_plan = calc(monthly_contribution=500)  # w ramach maksimum: odkĹ‚adanie w czasie mieĹ›ci siÄ™ w budĹĽecie
+    ok_plan = calc(monthly_contribution=500)  # w ramach maksimum: odkładanie w czasie mieści się w budżecie
     assert ok_plan["fits_budget"] is True and ok_plan["upfront"]["contribution_source"] == "USER"
     assert "CATEGORY_BUDGET_EXCEEDED" not in {w["code"] for w in ok_plan["warnings"]}
 
@@ -280,10 +280,10 @@ def test_goal_in_category_gets_max_contribution_shared_with_other_goals(client):
     assert res.json["contribution_exceeds"] is False
     _, res = client.get("/api/v1/goals", headers=auth)
     by_name = {x["name"]: x for x in res.json["items"]}
-    # Rower zarezerwowaĹ‚ 500, wiÄ™c na KonsolÄ™ zostaje 300 (wolne 800 - 500)
+    # Rower zarezerwował 500, więc na Konsolę zostaje 300 (wolne 800 - 500)
     assert by_name["Konsola"]["max_monthly_contribution"] == 300
     assert by_name["Konsola"]["months_to_goal"] == round(3200 / 300, 1)
-    # Konsola nie ma wĹ‚asnej wpĹ‚aty, wiÄ™c nie blokuje limitu Roweru
+    # Konsola nie ma własnej wpłaty, więc nie blokuje limitu Roweru
     assert by_name["Rower"]["max_monthly_contribution"] == 800
 
     too_big = {**bike, "name": "Motor", "monthly_contribution": 900}
@@ -334,7 +334,7 @@ def test_savings_goals_progress_and_deposits(client):
     _, res = client.post(deposit, json={"amount": 3500}, headers=auth)
     assert res.json["completed"] is True and res.json["remaining"] == 0
     _, res = client.post(deposit, json={"amount": -100}, headers=auth)
-    assert res.json["completed"] is False  # wypĹ‚ata cofa ukoĹ„czenie
+    assert res.json["completed"] is False  # wypłata cofa ukończenie
 
     _, res = client.put(f"/api/v1/goals/{gid}", json={**goal, "name": "Wakacje 2027"}, headers=auth)
     assert res.json["name"] == "Wakacje 2027"
@@ -355,10 +355,10 @@ def test_real_hourly_rate_profile_and_saved_calculation(client):
     assert res.json["effective_hourly_rate"] == 45.67 and res.json["rate_mode"] == "REAL"
 
     _, res = client.post("/api/v1/calculations", json={"name": "x", "purchase_price": 2000}, headers=auth)
-    assert res.json["result"]["work"]["hours"] > 43.4  # realnie wiÄ™cej godzin niĹĽ 34,7 h nominalnie
-    assert res.json["result"]["work"]["income_percent"] == 20.0  # udziaĹ‚ liczony od dochodu netto
+    assert res.json["result"]["work"]["hours"] > 43.4  # realnie więcej godzin niż 34,7 h nominalnie
+    assert res.json["result"]["work"]["income_percent"] == 20.0  # udział liczony od dochodu netto
     _, res = client.get(f"/api/v1/calculations/{res.json['id']}", headers=auth)
-    assert res.json["result"]["work"]["income_percent"] == 20.0  # takĹĽe po odczycie z migawki
+    assert res.json["result"]["work"]["income_percent"] == 20.0  # także po odczycie z migawki
 
 
 def test_cost_per_use_in_api(client):
@@ -387,7 +387,7 @@ def test_loan_dates_payment_day_and_derived_schedule(client):
         "start_date": start.isoformat(),
         "end_date": end.isoformat(),
         "payment_day": 20,
-    }  # brak installments_left - liczone z daty koĹ„ca
+    }  # brak installments_left - liczone z daty końca
     _, res = client.put("/api/v1/budget", json={"percentages": pct, "loans": [loan]}, headers=auth)
     assert res.status == 200
     v = res.json["loans"][0]
@@ -400,7 +400,7 @@ def test_loan_dates_payment_day_and_derived_schedule(client):
     assert v["remaining_to_pay"] == 800 * v["installments_left"]
     assert res.json["monthly_loans"] == 800
 
-    # kredyt z datÄ… koĹ„ca w przeszĹ‚oĹ›ci jest spĹ‚acony i nie obciÄ…ĹĽa budĹĽetu
+    # kredyt z datą końca w przeszłości jest spłacony i nie obciąża budżetu
     past = {
         **loan,
         "end_date": (now - timedelta(days=40)).isoformat(),
@@ -410,7 +410,7 @@ def test_loan_dates_payment_day_and_derived_schedule(client):
     assert res.json["loans"][0]["finished"] is True and res.json["loans"][0]["installments_left"] == 0
     assert res.json["monthly_loans"] == 0 and res.json["last_installment_in_months"] == 0
 
-    # walidacja: potrzebna liczba rat albo data koĹ„ca; koniec nie moĹĽe byÄ‡ przed poczÄ…tkiem; dzieĹ„ raty 1-31
+    # walidacja: potrzebna liczba rat albo data końca; koniec nie może być przed początkiem; dzień raty 1-31
     bad = [
         {"name": "x", "installment_amount": 100},
         {**loan, "end_date": (start - timedelta(days=1)).isoformat()},
@@ -421,7 +421,7 @@ def test_loan_dates_payment_day_and_derived_schedule(client):
         _, res = client.put("/api/v1/budget", json={"percentages": pct, "loans": [b]}, headers=auth)
         assert res.status == 422, b
 
-    # stara forma (sama liczba rat) nadal dziaĹ‚a
+    # stara forma (sama liczba rat) nadal działa
     _, res = client.put(
         "/api/v1/budget",
         json={"percentages": pct, "loans": [{"name": "x", "installment_amount": 100, "installments_left": 12}]},
@@ -456,11 +456,11 @@ def test_history_pagination_search_filter_and_sort(client):
             body.update(type="TCO", ownership_years=2)
         client.post("/api/v1/calculations", json=body, headers=auth)
 
-    _, res = client.get("/api/v1/calculations", headers=auth)  # domyĹ›lnie: wszystko, od najnowszego
+    _, res = client.get("/api/v1/calculations", headers=auth)  # domyślnie: wszystko, od najnowszego
     assert [x["name"] for x in res.json["items"]] == names[::-1]
     assert res.json["total"] == 5 and res.json["next_cursor"] is None
 
-    # strony po 2 sztuki, kursor prowadzi do kolejnych bez powtĂłrzeĹ„
+    # strony po 2 sztuki, kursor prowadzi do kolejnych bez powtórzeń
     seen, cursor = [], None
     for _ in range(5):
         url = "/api/v1/calculations?limit=2" + (f"&cursor={cursor}" if cursor else "")
@@ -476,9 +476,9 @@ def test_history_pagination_search_filter_and_sort(client):
     _, res = client.get("/api/v1/calculations?sort=created_asc&limit=2", headers=auth)
     assert [x["name"] for x in res.json["items"]] == names[:2]
 
-    _, res = client.get("/api/v1/calculations?q=ALFA", headers=auth)  # bez rozrĂłĹĽniania wielkoĹ›ci liter
+    _, res = client.get("/api/v1/calculations?q=ALFA", headers=auth)  # bez rozróżniania wielkości liter
     assert [x["name"] for x in res.json["items"]] == ["alfa 50%"] and res.json["total"] == 1
-    _, res = client.get("/api/v1/calculations?q=50%25", headers=auth)  # "%" jest dosĹ‚owny
+    _, res = client.get("/api/v1/calculations?q=50%25", headers=auth)  # "%" jest dosłowny
     assert res.json["total"] == 1
     _, res = client.get("/api/v1/calculations?q=%25", headers=auth)
     assert res.json["total"] == 1  # tylko nazwa ze znakiem %, a nie wszystko

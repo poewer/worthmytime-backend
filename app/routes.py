@@ -38,7 +38,7 @@ bp = Blueprint("api", url_prefix="/api/v1")
 
 @bp.options("/<path:path>")
 async def preflight(request: Request, path: str):
-    # nagĹ‚Ăłwki CORS dokĹ‚ada middleware on_response
+    # nagłówki CORS dokłada middleware on_response
     return empty(204)
 
 
@@ -64,7 +64,7 @@ async def register(request: Request):
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise ApiError("Konto z tym adresem e-mail juĹĽ istnieje", 409)
+        raise ApiError("Konto z tym adresem e-mail już istnieje", 409)
     return ok({"token": create_token(user.id), "profile": user_profile(user)}, 201)
 
 
@@ -73,7 +73,7 @@ async def login(request: Request):
     data = parse(Credentials, request)
     user = await request.ctx.db.scalar(select(User).where(User.email == data.email.lower()))
     if user is None or not verify_password(data.password, user.password_hash):
-        raise ApiError("NieprawidĹ‚owy e-mail lub hasĹ‚o", 401)
+        raise ApiError("Nieprawidłowy e-mail lub hasło", 401)
     return ok({"token": create_token(user.id), "profile": user_profile(user)})
 
 
@@ -153,11 +153,11 @@ async def _require_user(request: Request) -> User:
     return user
 
 
-# ---------- budĹĽet ----------
+# ---------- budżet ----------
 
 
 async def _plan_for(request: Request, user: User):
-    """Plan budĹĽetu uĹĽytkownika liczony od jego aktualnego dochodu (budĹĽet jest "na ĹĽywo")."""
+    """Plan budżetu użytkownika liczony od jego aktualnego dochodu (budżet jest "na żywo")."""
     return await load_plan(request, user, rate_from_user(user).monthly_income)
 
 
@@ -202,8 +202,8 @@ async def put_budget(request: Request):
         request.ctx.db.add(row)
     for cat in CATEGORIES:
         setattr(row, f"pct_{cat.value.lower()}", data.percentages[cat])
-    period = period_of(today())  # wydane w kategoriach liczy rejestr wydatkĂłw, nie ten formularz
-    # lista kredytĂłw jest zastÄ™powana w caĹ‚oĹ›ci (jak w formularzu: zapis caĹ‚ego planu)
+    period = period_of(today())  # wydane w kategoriach liczy rejestr wydatków, nie ten formularz
+    # lista kredytów jest zastępowana w całości (jak w formularzu: zapis całego planu)
     db = request.ctx.db
     for old in await load_loans(request, user):
         await db.delete(old)
@@ -213,7 +213,7 @@ async def put_budget(request: Request):
             position=i,
             name=loan.name,
             installment_amount=loan.installment_amount,
-            # migawka liczby rat na dziĹ› (przy podanej dacie koĹ„ca liczy siÄ™ ona dynamicznie)
+            # migawka liczby rat na dziś (przy podanej dacie końca liczy się ona dynamicznie)
             installments_left=loan.installments_left
             or remaining_installments(today(), None, loan.end_date, loan.payment_day),
             start_date=loan.start_date,
@@ -232,7 +232,7 @@ async def put_budget(request: Request):
     )
 
 
-# ---------- historia obliczeĹ„ ----------
+# ---------- historia obliczeń ----------
 
 
 async def _own_calc(request: Request, user: User, calc_id: str) -> Calculation:
@@ -266,7 +266,7 @@ async def save_calculation(request: Request):
 @bp.get("/calculations")
 @login_required
 async def list_calculations(request: Request):
-    """Historia z paginacjÄ…: ?limit=&cursor=&q=&type=&category=&sort=created_desc|created_asc|name_asc|name_desc."""
+    """Historia z paginacją: ?limit=&cursor=&q=&type=&category=&sort=created_desc|created_asc|name_asc|name_desc."""
     params = parse_list_params({k: v[0] for k, v in request.args.items()})
     user = request.ctx.user
 
@@ -318,7 +318,7 @@ async def update_calculation(request: Request, calc_id: str):
     data = parse(CalculationIn, request)
     user = request.ctx.user
     c = await _own_calc(request, user, calc_id)
-    # edycja przelicza wynik wedĹ‚ug aktualnego profilu
+    # edycja przelicza wynik według aktualnego profilu
     rate = rate_from_user(user)
     c.currency, c.hourly_rate, c.net_income = user.currency, rate.hourly_rate, rate.monthly_income
     c.hours_per_day, c.days_per_week = rate.hours_per_day, rate.days_per_week
