@@ -1,6 +1,6 @@
-﻿name: Backup check
+name: Backup check
 
-# Sprawdza na prawdziwym PostgreSQL, ĹĽe skrypty kopii zapasowej dziaĹ‚ajÄ… i kopiÄ™ da siÄ™ odtworzyÄ‡.
+# Sprawdza na prawdziwym PostgreSQL, że skrypty kopii zapasowej działają i kopię da się odtworzyć.
 on:
   pull_request:
     paths:
@@ -8,7 +8,7 @@ on:
       - "migrations/**"
       - ".github/workflows/backup-check.yml"
   schedule:
-    - cron: "17 4 * * 1" # co poniedziaĹ‚ek
+    - cron: "17 4 * * 1" # co poniedziałek
   workflow_dispatch:
 
 permissions:
@@ -46,7 +46,7 @@ jobs:
       - run: uv sync --frozen
       - name: Migracje (schemat jak na produkcji)
         run: uv run alembic upgrade head
-      - name: Dane przykĹ‚adowe
+      - name: Dane przykładowe
         run: |
           psql "postgresql://wmt:wmt@localhost:5432/worthmytime" -c \
             "INSERT INTO users (id, email, password_hash, currency, hours_per_day, days_per_week, commute_minutes_per_day, work_costs_monthly, rate_mode, created_at) VALUES ('backup-check', 'backup@check.pl', 'x', 'PLN', 8, 5, 0, 0, 'NOMINAL', now())"
