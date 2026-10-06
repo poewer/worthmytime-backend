@@ -161,3 +161,12 @@ def test_alerts_endpoint_loan_goal_and_wish(client):
     client.post(f"/api/v1/budget/loans/{loan_id}/pay", json={"paid_on": loan_alert["params"]["due_date"]}, headers=auth)
     _, res = client.get("/api/v1/alerts", headers=auth)
     assert "LOAN_DUE" not in {a["code"] for a in res.json["items"]}  # opłacona rata wycisza alert
+
+
+def test_dismiss_accepts_percent_encoded_key(client):
+    auth = _register(client, "alerts4@b.pl")
+    client.put("/api/v1/profile", json=PROFILE, headers=auth)
+    _spend(client, auth, 600)
+    _, res = client.post("/api/v1/alerts/CATEGORY_USAGE%3AFUN/dismiss", headers=auth)  # tak wysyła ją przeglądarka
+    assert res.status == 200 and res.json["dismissed"] == "CATEGORY_USAGE:FUN"
+    assert client.get("/api/v1/alerts", headers=auth)[1].json["items"] == []

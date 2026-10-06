@@ -1,5 +1,7 @@
 """Centrum alertów: GET /alerts oraz POST /alerts/{key}/dismiss."""
 
+from urllib.parse import unquote
+
 from sanic import Blueprint, Request
 from sqlalchemy import select
 
@@ -95,6 +97,7 @@ async def list_alerts(request: Request):
 @login_required
 async def dismiss_alert(request: Request, key: str):
     """Ukrywa alert do zmiany jego stanu (np. przejścia z 80% na 100% budżetu kategorii)."""
+    key = unquote(key)  # klient koduje dwukropek z klucza (CATEGORY_USAGE%3AFUN); parametr ścieżki zostaje zakodowany
     user, db = request.ctx.user, request.ctx.db
     current = next((a for a in await compute_alerts(request, user) if a["key"] == key), None)
     if current is None:
