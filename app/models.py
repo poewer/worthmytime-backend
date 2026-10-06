@@ -143,6 +143,20 @@ class Expense(Base):
     __table_args__ = (UniqueConstraint("source_type", "source_id", "spent_on", name="uq_expense_source_date"),)
 
 
+class AlertDismissal(Base):
+    """Ukryty alert: wraca, gdy jego stan (state) się zmieni."""
+
+    __tablename__ = "alert_dismissals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    key: Mapped[str] = mapped_column(String(120))
+    state: Mapped[str] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_alert_dismissal_user_key"),)
+
+
 class RecurringExpense(Base):
     """Szablon stałego wydatku: wpis w rejestrze powstaje automatycznie w dniu płatności co miesiąc."""
 
