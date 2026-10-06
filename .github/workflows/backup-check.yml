@@ -1,6 +1,6 @@
-name: Backup check
+﻿name: Backup check
 
-# Sprawdza na prawdziwym PostgreSQL, że skrypty kopii zapasowej działają i kopię da się odtworzyć.
+# Sprawdza na prawdziwym PostgreSQL, ĹĽe skrypty kopii zapasowej dziaĹ‚ajÄ… i kopiÄ™ da siÄ™ odtworzyÄ‡.
 on:
   pull_request:
     paths:
@@ -8,7 +8,7 @@ on:
       - "migrations/**"
       - ".github/workflows/backup-check.yml"
   schedule:
-    - cron: "17 4 * * 1" # co poniedziałek
+    - cron: "17 4 * * 1" # co poniedziaĹ‚ek
   workflow_dispatch:
 
 permissions:
@@ -34,14 +34,19 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://wmt:wmt@localhost:5432/worthmytime
       JWT_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
-      BACKUP_DIR: ${{ runner.temp }}/backups
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - name: Klient PostgreSQL 16 i katalog kopii
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          pg_dump --version
+          echo "BACKUP_DIR=$RUNNER_TEMP/backups" >> "$GITHUB_ENV"
       - run: uv sync --frozen
       - name: Migracje (schemat jak na produkcji)
         run: uv run alembic upgrade head
-      - name: Dane przykładowe
+      - name: Dane przykĹ‚adowe
         run: |
           psql "postgresql://wmt:wmt@localhost:5432/worthmytime" -c \
             "INSERT INTO users (id, email, password_hash, currency, hours_per_day, days_per_week, commute_minutes_per_day, work_costs_monthly, rate_mode, created_at) VALUES ('backup-check', 'backup@check.pl', 'x', 'PLN', 8, 5, 0, 0, 'NOMINAL', now())"
@@ -55,3 +60,4 @@ jobs:
           RETENTION_DAYS=14 bash ops/backup.sh
           test ! -e "$BACKUP_DIR/worthmytime-19990101T000000Z.dump"
           test "$(find "$BACKUP_DIR" -name 'worthmytime-*.dump' | wc -l)" -eq 1
+
