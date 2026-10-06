@@ -30,16 +30,24 @@ class BudgetPlan:
     spent: dict[Category, float] = field(default_factory=lambda: {c: 0.0 for c in CATEGORIES})
     # False = użytkownik nie ustawił budżetu; liczymy z domyślnego 50/25/15/10 i wydatków 0
     is_custom: bool = False
+    # suma miesięcznych rat kredytów i pożyczek - wymagalne zobowiązania liczone w NEEDS (P0)
+    monthly_loans: float = 0.0
+    loans_count: int = 0
+    last_installment_in_months: int = 0
+
+    def effective_spent(self, category: Category) -> float:
+        extra = self.monthly_loans if category == Category.NEEDS else 0.0
+        return round(self.spent[category] + extra, 2)
 
     def category_budget(self, category: Category) -> float:
         return round(self.monthly_income * self.percentages[category] / 100, 2)
 
     def available(self, category: Category) -> float:
-        return round(self.category_budget(category) - self.spent[category], 2)
+        return round(self.category_budget(category) - self.effective_spent(category), 2)
 
     @property
     def total_spent(self) -> float:
-        return round(sum(self.spent.values()), 2)
+        return round(sum(self.spent.values()) + self.monthly_loans, 2)
 
 
 @dataclass(frozen=True)
@@ -138,12 +146,47 @@ def rule_higher_priority_at_risk(category: Category, exceeded: list[dict]) -> di
     )
 
 
+def rule_loans_exceed_needs(plan: BudgetPlan) -> dict | None:
+    """LOANS_EXCEED_NEEDS_BUDGET: same raty kredytów i pożyczek przekraczają budżet kategorii NEEDS."""
+    needs_budget = plan.category_budget(Category.NEEDS)
+    if plan.monthly_loans <= 0 or plan.monthly_loans <= needs_budget:
+        return None
+    return warning(
+        "LOANS_EXCEED_NEEDS_BUDGET",
+        CRITICAL,
+        monthly_loans=round(plan.monthly_loans, 2),
+        needs_budget=needs_budget,
+        overrun=round(plan.monthly_loans - needs_budget, 2),
+    )
+
+
 def rule_no_budget_data(plan: BudgetPlan) -> dict | None:
     """NO_BUDGET_DATA: użytkownik nie ustawił budżetu - wynik opiera się na założeniach domyślnych."""
     return None if plan.is_custom else warning("NO_BUDGET_DATA", INFO)
 
 
 # --- analiza ----------------------------------------------------------------------------------
+
+
+def loan_view(
+    name: str,
+    installment: float,
+    left: int,
+    loan_amount: float | None,
+    plan: BudgetPlan,
+    hourly_rate: float | None,
+) -> dict:
+    """Pochodne dla jednego kredytu: ile jeszcze do spłaty, kiedy koniec, jaki udział w dochodzie i w czasie pracy."""
+    remaining = round(installment * left, 2)
+    return {
+        "name": name,
+        "installment_amount": installment,
+        "installments_left": left,
+        "loan_amount": loan_amount,
+        "remaining_to_pay": remaining,
+        "income_percent": _pct(installment, plan.monthly_income),
+        "remaining_work_hours": round(remaining / hourly_rate, 1) if hourly_rate else None,
+    }
 
 
 def months_to_goal(remaining: float, contribution: float) -> float | None:
@@ -161,7 +204,7 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
 
     costs = split_costs(calc)
     budget = plan.category_budget(category)
-    spent = plan.spent[category]
+    spent = plan.effective_spent(category)  # dla NEEDS razem z ratami kredytów
     available = round(budget - spent, 2)
 
     result: dict = {
@@ -173,6 +216,15 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
         "available": available,
         "usage_percent": _pct(spent, budget),
         "is_custom": plan.is_custom,
+        "obligations": {
+            "monthly_installments": round(plan.monthly_loans, 2),
+            "loans_count": plan.loans_count,
+            "income_percent": _pct(plan.monthly_loans, plan.monthly_income),
+            "last_installment_in_months": plan.last_installment_in_months,
+            "included_in_category": category == Category.NEEDS,
+        }
+        if plan.loans_count
+        else None,
         "upfront": None,
         "monthly": None,
     }
@@ -216,6 +268,7 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
         *exceeded,
         rule_higher_priority_at_risk(category, exceeded),
         rule_budget_deficit(plan, costs.upfront, costs.monthly),
+        rule_loans_exceed_needs(plan),
         None if exceeded else rule_category_tight(category, budget, spent, costs.upfront, costs.monthly),
         rule_no_budget_data(plan),
     ]

@@ -30,11 +30,22 @@ CATEGORIES = list(Category)
 DEFAULT_PERCENTAGES = {Category.NEEDS: 50.0, Category.FUTURE: 25.0, Category.GOALS: 15.0, Category.FUN: 10.0}
 
 
+class LoanIn(BaseModel):
+    """Kredyt lub pożyczka w trakcie spłaty (rata to wymagalne zobowiązanie, P0)."""
+
+    name: str = Field(min_length=1, max_length=100)
+    installment_amount: float = Field(gt=0, description="wysokość miesięcznej raty")
+    installments_left: int = Field(ge=1, le=600, description="liczba rat do spłacenia")
+    loan_amount: float | None = Field(default=None, ge=0, description="pierwotna kwota kredytu (opcjonalnie)")
+
+
 class BudgetIn(BaseModel):
     """Plan budżetu: procenty kategorii (suma 100) i wydatki w bieżącym miesiącu w każdej z nich."""
 
     percentages: dict[Category, float] = Field(default_factory=lambda: dict(DEFAULT_PERCENTAGES))
     spent: dict[Category, float] = Field(default_factory=dict)
+    # kredyty i pożyczki: raty wchodzą automatycznie do kategorii NEEDS, więc nie wpisuje się ich w `spent`
+    loans: list[LoanIn] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
     def _check(self):

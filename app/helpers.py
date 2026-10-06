@@ -4,12 +4,13 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 from sanic import Request
 from sanic.response import json as json_response
+from sqlalchemy import select
 
 from . import calc
-from .budget import BudgetPlan, analyze
+from .budget import BudgetPlan, analyze, loan_view
 from .errors import ApiError
-from .models import Budget, Calculation, Cost, User
-from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, ProfileIn
+from .models import Budget, BudgetLoan, Calculation, Cost, User
+from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, LoanIn, ProfileIn
 from .security import decode_token
 
 M = TypeVar("M", bound=BaseModel)
@@ -135,33 +136,71 @@ def _strip_income_percent(result: dict) -> None:
         h["work"].pop("income_percent", None)
 
 
+def _loan_totals(loans: list[LoanIn] | list[BudgetLoan]) -> dict:
+    return {
+        "monthly_loans": round(sum(x.installment_amount for x in loans), 2),
+        "loans_count": len(loans),
+        "last_installment_in_months": max((x.installments_left for x in loans), default=0),
+    }
+
+
 def plan_from_input(budget: BudgetIn | None, monthly_income: float) -> BudgetPlan:
     """Budżet przesłany w żądaniu (użytkownik anonimowy) albo domyślny 50/25/15/10."""
     if budget is None:
         return BudgetPlan(monthly_income=monthly_income)
     return BudgetPlan(
-        monthly_income=monthly_income, percentages=dict(budget.percentages), spent=dict(budget.spent), is_custom=True
+        monthly_income=monthly_income,
+        percentages=dict(budget.percentages),
+        spent=dict(budget.spent),
+        is_custom=True,
+        **_loan_totals(budget.loans),
     )
 
 
-def plan_from_row(row: Budget | None, monthly_income: float) -> BudgetPlan:
+def plan_from_row(row: Budget | None, monthly_income: float, loans: list[BudgetLoan] | None = None) -> BudgetPlan:
+    loans = loans or []
     if row is None:
-        return BudgetPlan(monthly_income=monthly_income)
+        # kredyty obowiązują także bez ustawionych procentów - to realne zobowiązania
+        return BudgetPlan(monthly_income=monthly_income, **_loan_totals(loans))
     return BudgetPlan(
         monthly_income=monthly_income,
         percentages={c: getattr(row, f"pct_{c.value.lower()}") for c in CATEGORIES},
         spent={c: getattr(row, f"spent_{c.value.lower()}") for c in CATEGORIES},
         is_custom=True,
+        **_loan_totals(loans),
     )
 
 
+async def load_loans(request: Request, user: User) -> list[BudgetLoan]:
+    rows = await request.ctx.db.scalars(
+        select(BudgetLoan).where(BudgetLoan.user_id == user.id).order_by(BudgetLoan.position)
+    )
+    return list(rows)
+
+
 async def load_plan(request: Request, user: User, monthly_income: float) -> BudgetPlan:
-    return plan_from_row(await request.ctx.db.get(Budget, user.id), monthly_income)
+    return plan_from_row(await request.ctx.db.get(Budget, user.id), monthly_income, await load_loans(request, user))
 
 
-def serialize_budget(row: Budget | None, monthly_income: float | None) -> dict:
-    plan = plan_from_row(row, monthly_income or 0.0)
+def serialize_budget(
+    row: Budget | None,
+    monthly_income: float | None,
+    loans: list[BudgetLoan] | None = None,
+    hourly_rate: float | None = None,
+) -> dict:
+    loans = loans or []
+    plan = plan_from_row(row, monthly_income or 0.0, loans)
     return {
+        "loans": [
+            {
+                "id": x.id,
+                **loan_view(x.name, x.installment_amount, x.installments_left, x.loan_amount, plan, hourly_rate),
+            }
+            for x in loans
+        ],
+        "monthly_loans": plan.monthly_loans,
+        "loans_income_percent": round(plan.monthly_loans / monthly_income * 100, 1) if monthly_income else None,
+        "last_installment_in_months": plan.last_installment_in_months,
         "percentages": {c.value: plan.percentages[c] for c in CATEGORIES},
         "spent": {c.value: plan.spent[c] for c in CATEGORIES},
         "amounts": {c.value: plan.category_budget(c) for c in CATEGORIES} if monthly_income else None,

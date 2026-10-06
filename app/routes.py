@@ -11,6 +11,7 @@ from .errors import ApiError
 from .helpers import (
     apply_input,
     current_user,
+    load_loans,
     load_plan,
     login_required,
     ok,
@@ -24,7 +25,7 @@ from .helpers import (
     to_input,
     user_profile,
 )
-from .models import Budget, Calculation, User
+from .models import Budget, BudgetLoan, Calculation, User
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
 from .security import create_token, hash_password, verify_password
 
@@ -153,6 +154,12 @@ async def _plan_for(request: Request, user: User):
     return await load_plan(request, user, rate_from_user(user).monthly_income)
 
 
+def _user_rate(user: User) -> float | None:
+    if user.hourly_rate is None and user.monthly_income is None:
+        return None
+    return rate_from_user(user).hourly_rate
+
+
 def _user_income(user: User) -> float | None:
     if user.hourly_rate is None and user.monthly_income is None:
         return None
@@ -163,7 +170,12 @@ def _user_income(user: User) -> float | None:
 @login_required
 async def get_budget(request: Request):
     user = request.ctx.user
-    return ok(serialize_budget(await request.ctx.db.get(Budget, user.id), _user_income(user)))
+    income = _user_income(user)
+    return ok(
+        serialize_budget(
+            await request.ctx.db.get(Budget, user.id), income, await load_loans(request, user), _user_rate(user)
+        )
+    )
 
 
 @bp.put("/budget")
@@ -178,8 +190,24 @@ async def put_budget(request: Request):
     for cat in CATEGORIES:
         setattr(row, f"pct_{cat.value.lower()}", data.percentages[cat])
         setattr(row, f"spent_{cat.value.lower()}", data.spent[cat])
-    await request.ctx.db.commit()
-    return ok(serialize_budget(row, _user_income(user)))
+    # lista kredytów jest zastępowana w całości (jak w formularzu: zapis całego planu)
+    db = request.ctx.db
+    for old in await load_loans(request, user):
+        await db.delete(old)
+    loans = [
+        BudgetLoan(
+            user_id=user.id,
+            position=i,
+            name=loan.name,
+            installment_amount=loan.installment_amount,
+            installments_left=loan.installments_left,
+            loan_amount=loan.loan_amount,
+        )
+        for i, loan in enumerate(data.loans)
+    ]
+    db.add_all(loans)
+    await db.commit()
+    return ok(serialize_budget(row, _user_income(user), loans, _user_rate(user)))
 
 
 # ---------- historia obliczeń ----------
