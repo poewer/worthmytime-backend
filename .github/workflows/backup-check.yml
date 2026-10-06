@@ -59,5 +59,6 @@ jobs:
           touch -d '30 days ago' "$BACKUP_DIR/worthmytime-19990101T000000Z.dump"
           RETENTION_DAYS=14 bash ops/backup.sh
           test ! -e "$BACKUP_DIR/worthmytime-19990101T000000Z.dump"
-          test "$(find "$BACKUP_DIR" -name 'worthmytime-*.dump' | wc -l)" -eq 1
+          test "$(find "$BACKUP_DIR" -name 'worthmytime-*.dump' | wc -l)" -eq 2
+
 
