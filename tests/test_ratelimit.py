@@ -1,4 +1,4 @@
-﻿import socket
+import socket
 
 import pytest
 from sanic_testing.reusable import ReusableClient
@@ -21,9 +21,9 @@ def test_sliding_window_blocks_and_releases():
     assert [w.hit("a") for _ in range(3)] == [0, 0, 0]
     wait = w.hit("a")
     assert 1 <= wait <= 61
-    assert w.hit("b") == 0  # inny klucz ma wĹ‚asny licznik
+    assert w.hit("b") == 0  # inny klucz ma własny licznik
     clock.now += 61
-    assert w.hit("a") == 0  # okno minÄ™Ĺ‚o
+    assert w.hit("a") == 0  # okno minęło
 
 
 def test_blocked_hit_does_not_extend_the_block():
@@ -32,7 +32,7 @@ def test_blocked_hit_does_not_extend_the_block():
     w.hit("a")
     clock.now += 5
     assert w.hit("a") > 0
-    clock.now += 6  # od pierwszego zdarzenia minÄ™Ĺ‚o 11 s
+    clock.now += 6  # od pierwszego zdarzenia minęło 11 s
     assert w.hit("a") == 0
 
 
@@ -41,7 +41,7 @@ def test_login_lockout_per_account_and_ip():
     rl = RateLimiter(Limits(login_max_failures=3, login_window_seconds=900), clock)
     for _ in range(3):
         assert rl.login_blocked("1.1.1.1", "A@b.pl") == 0
-        rl.login_failed("1.1.1.1", "a@b.pl")  # wielkoĹ›Ä‡ liter e-maila nie ma znaczenia
+        rl.login_failed("1.1.1.1", "a@b.pl")  # wielkość liter e-maila nie ma znaczenia
     assert rl.login_blocked("1.1.1.1", "a@b.pl") > 0
     assert rl.login_blocked("2.2.2.2", "a@b.pl") == 0  # inny adres nie jest blokowany
     assert rl.login_blocked("1.1.1.1", "inne@b.pl") == 0
@@ -90,7 +90,7 @@ def test_login_is_locked_after_repeated_failures(limited_client):
     assert res.status == 429
     assert int(res.headers["retry-after"]) > 0
     assert "nieudanych" in res.json["error"]
-    # nawet poprawne hasĹ‚o jest wstrzymane na czas blokady
+    # nawet poprawne hasło jest wstrzymane na czas blokady
     _, res = c.post("/api/v1/auth/login", json={"email": "rl@b.pl", "password": "supersecret1"})
     assert res.status == 429
     # inne konto z tego samego adresu loguje siÄ™ normalnie
