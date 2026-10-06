@@ -11,7 +11,7 @@ from . import calc
 from .budget import BudgetPlan, analyze, loan_view
 from .errors import ApiError
 from .models import Budget, BudgetLoan, Calculation, Cost, Expense, User
-from .planning import month_bounds, period_of, totals_by_category
+from .planning import month_bounds, period_of, remaining_installments, totals_by_category
 from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, LoanIn, ProfileIn
 from .security import decode_token
 
@@ -169,10 +169,14 @@ def _strip_income_percent(result: dict) -> None:
 
 
 def _loan_totals(loans: list[LoanIn] | list[BudgetLoan]) -> dict:
+    """Sumy rat aktywnych kredytów; spłacone (0 pozostałych rat) nie wchodzą do budżetu."""
+    now = today()
+    left = [remaining_installments(now, x.installments_left, x.end_date, x.payment_day) for x in loans]
+    active = [(x.installment_amount, n) for x, n in zip(loans, left, strict=True) if n > 0]
     return {
-        "monthly_loans": round(sum(x.installment_amount for x in loans), 2),
-        "loans_count": len(loans),
-        "last_installment_in_months": max((x.installments_left for x in loans), default=0),
+        "monthly_loans": round(sum(a for a, _ in active), 2),
+        "loans_count": len(active),
+        "last_installment_in_months": max((n for _, n in active), default=0),
     }
 
 
@@ -260,7 +264,18 @@ def serialize_budget(
         "loans": [
             {
                 "id": x.id,
-                **loan_view(x.name, x.installment_amount, x.installments_left, x.loan_amount, plan, hourly_rate),
+                **loan_view(
+                    x.name,
+                    x.installment_amount,
+                    x.installments_left,
+                    x.loan_amount,
+                    plan,
+                    hourly_rate,
+                    start_date=x.start_date,
+                    end_date=x.end_date,
+                    payment_day=x.payment_day,
+                    today=today(),
+                ),
             }
             for x in loans
         ],

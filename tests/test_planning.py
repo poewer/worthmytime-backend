@@ -91,6 +91,48 @@ def test_totals_and_monthly_summary_include_empty_months():
     assert out[2]["totals"]["FUN"] == 50.0  # wpis ze stycznia 2025 poza zakresem
 
 
+# --- terminy spłat kredytów --------------------------------------------------------------------
+
+
+def test_next_payment_date_and_month_end_clamping():
+    from app.planning import add_months, next_payment_date
+
+    assert next_payment_date(date(2026, 10, 6), 15) == date(2026, 10, 15)  # termin jeszcze w tym miesiącu
+    assert next_payment_date(date(2026, 10, 15), 15) == date(2026, 10, 15)  # dziś też się liczy
+    assert next_payment_date(date(2026, 10, 16), 15) == date(2026, 11, 15)  # w tym miesiącu już minął
+    assert next_payment_date(date(2026, 12, 20), 5) == date(2027, 1, 5)  # przejście przez rok
+    assert next_payment_date(date(2027, 2, 1), 31) == date(2027, 2, 28)  # 31. w lutym -> ostatni dzień miesiąca
+    assert add_months(date(2026, 1, 31), 1, 31) == date(2026, 2, 28)
+    assert add_months(date(2026, 2, 28), 1, 31) == date(2026, 3, 31)  # dzień wraca do 31. w dłuższym miesiącu
+
+
+def test_remaining_installments_shrink_with_time_when_end_date_is_given():
+    from app.planning import remaining_installments
+
+    end = date(2027, 3, 15)
+    # raty 15. dnia: 15.10, 15.11, 15.12, 15.01, 15.02, 15.03 = 6
+    assert remaining_installments(date(2026, 10, 6), None, end, 15) == 6
+    assert remaining_installments(date(2026, 10, 16), None, end, 15) == 5  # październikowa już minęła
+    assert remaining_installments(date(2027, 3, 15), None, end, 15) == 1  # dzień ostatniej raty
+    assert remaining_installments(date(2027, 3, 16), None, end, 15) == 0  # spłacony
+    # bez dnia raty bierzemy dzień z daty końca
+    assert remaining_installments(date(2026, 10, 6), None, end, None) == 6
+    # bez daty końca liczba rat jest taka, jak wpisał użytkownik
+    assert remaining_installments(date(2026, 10, 6), 36, None, 15) == 36
+
+
+def test_last_payment_date_and_repayment_progress():
+    from app.planning import last_payment_date, repayment_progress
+
+    assert last_payment_date(date(2026, 10, 6), 3, 15, None) == date(2026, 12, 15)  # 15.10 + 2 miesiące
+    assert last_payment_date(date(2026, 10, 6), 3, 15, date(2027, 1, 1)) == date(2027, 1, 1)
+    assert last_payment_date(date(2026, 10, 6), 0, 15, None) is None
+    assert repayment_progress(date(2026, 1, 1), date(2026, 1, 11), date(2026, 1, 6)) == 50.0
+    assert repayment_progress(date(2026, 1, 1), date(2027, 1, 1), date(2025, 1, 1)) == 0.0
+    assert repayment_progress(date(2026, 1, 1), date(2027, 1, 1), date(2030, 1, 1)) == 100.0
+    assert repayment_progress(None, date(2027, 1, 1), date(2026, 7, 2)) is None
+
+
 # --- lista życzeń ------------------------------------------------------------------------------
 
 

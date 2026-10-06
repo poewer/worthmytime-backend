@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import date
 
 from .calc import OCCURRENCES_PER_YEAR
+from .planning import last_payment_date, next_payment_date, remaining_installments, repayment_progress
 from .schemas import CATEGORIES, DEFAULT_PERCENTAGES, CalculationIn, Category, Frequency
 
 # Hierarchia priorytetów (sekcja 8): P0 > P1 > P2 > P3 > P4
@@ -200,14 +202,35 @@ def loan_view(
     loan_amount: float | None,
     plan: BudgetPlan,
     hourly_rate: float | None,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    payment_day: int | None = None,
+    today: date | None = None,
 ) -> dict:
-    """Pochodne dla jednego kredytu: ile jeszcze do spłaty, kiedy koniec, jaki udział w dochodzie i w czasie pracy."""
+    """Pochodne dla jednego kredytu: ile jeszcze do spłaty, kiedy koniec, jaki udział w dochodzie i w czasie pracy.
+
+    Z datą końca spłaty liczba rat jest wyliczana na dziś, więc maleje sama z upływem czasu.
+    """
+    now = today or date.today()
+    left = remaining_installments(now, left, end_date, payment_day)
     remaining = round(installment * left, 2)
+    due_day = payment_day or (end_date.day if end_date else now.day)
+    next_due = next_payment_date(now, due_day) if left > 0 else None
+    last_due = last_payment_date(now, left, payment_day, end_date)
     return {
         "name": name,
         "installment_amount": installment,
         "installments_left": left,
         "loan_amount": loan_amount,
+        "start_date": start_date.isoformat() if start_date else None,
+        "end_date": end_date.isoformat() if end_date else None,
+        "payment_day": payment_day,
+        "finished": left == 0,
+        "next_payment_date": next_due.isoformat() if next_due else None,
+        "days_to_next_payment": (next_due - now).days if next_due else None,
+        "last_payment_date": last_due.isoformat() if last_due else None,
+        "repayment_progress_percent": repayment_progress(start_date, end_date, now),
         "remaining_to_pay": remaining,
         "income_percent": _pct(installment, plan.monthly_income),
         "remaining_work_hours": round(remaining / hourly_rate, 1) if hourly_rate else None,

@@ -369,6 +369,68 @@ def test_cost_per_use_in_api(client):
     assert client.post("/api/v1/calculate", json=body)[1].status == 422
 
 
+def test_loan_dates_payment_day_and_derived_schedule(client):
+    from datetime import date, timedelta
+
+    from app.planning import add_months
+
+    auth = _register(client, "loandates@b.pl")
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+    pct = {"NEEDS": 50, "FUTURE": 25, "GOALS": 15, "FUN": 10}
+    now = date.today()
+    start = add_months(now, -6, 1)
+    end = add_months(now, 11, 20)
+    loan = {
+        "name": "Kredyt",
+        "installment_amount": 800,
+        "loan_amount": 20000,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "payment_day": 20,
+    }  # brak installments_left - liczone z daty końca
+    _, res = client.put("/api/v1/budget", json={"percentages": pct, "loans": [loan]}, headers=auth)
+    assert res.status == 200
+    v = res.json["loans"][0]
+    assert 11 <= v["installments_left"] <= 13
+    assert v["payment_day"] == 20 and v["end_date"] == end.isoformat() and v["start_date"] == start.isoformat()
+    assert date.fromisoformat(v["next_payment_date"]).day == 20
+    assert 0 <= v["days_to_next_payment"] <= 31
+    assert v["last_payment_date"] == end.isoformat() and v["finished"] is False
+    assert 0 < v["repayment_progress_percent"] < 100
+    assert v["remaining_to_pay"] == 800 * v["installments_left"]
+    assert res.json["monthly_loans"] == 800
+
+    # kredyt z datą końca w przeszłości jest spłacony i nie obciąża budżetu
+    past = {
+        **loan,
+        "end_date": (now - timedelta(days=40)).isoformat(),
+        "start_date": (now - timedelta(days=400)).isoformat(),
+    }
+    _, res = client.put("/api/v1/budget", json={"percentages": pct, "loans": [past]}, headers=auth)
+    assert res.json["loans"][0]["finished"] is True and res.json["loans"][0]["installments_left"] == 0
+    assert res.json["monthly_loans"] == 0 and res.json["last_installment_in_months"] == 0
+
+    # walidacja: potrzebna liczba rat albo data końca; koniec nie może być przed początkiem; dzień raty 1-31
+    bad = [
+        {"name": "x", "installment_amount": 100},
+        {**loan, "end_date": (start - timedelta(days=1)).isoformat()},
+        {**loan, "payment_day": 32},
+        {"name": "x", "installment_amount": 100, "installments_left": 12, "payment_day": 0},
+    ]
+    for b in bad:
+        _, res = client.put("/api/v1/budget", json={"percentages": pct, "loans": [b]}, headers=auth)
+        assert res.status == 422, b
+
+    # stara forma (sama liczba rat) nadal działa
+    _, res = client.put(
+        "/api/v1/budget",
+        json={"percentages": pct, "loans": [{"name": "x", "installment_amount": 100, "installments_left": 12}]},
+        headers=auth,
+    )
+    assert res.status == 200 and res.json["loans"][0]["installments_left"] == 12
+    assert res.json["loans"][0]["next_payment_date"] is not None
+
+
 def test_other_user_cannot_read(client):
     _, r1 = client.post("/api/v1/auth/register", json={"email": "u1@b.pl", "password": "supersecret1"})
     _, r2 = client.post("/api/v1/auth/register", json={"email": "u2@b.pl", "password": "supersecret1"})
