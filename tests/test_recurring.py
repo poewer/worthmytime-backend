@@ -1,4 +1,4 @@
-﻿# ruff: noqa: F811
+# ruff: noqa: F811
 from datetime import date, timedelta
 
 from app.helpers import today
@@ -16,7 +16,7 @@ def test_due_date_clamps_to_month_length():
 
 def test_due_dates_backfill_from_start_date_and_skip_future():
     got = list(due_dates(15, date(2026, 1, 20), None, date(2026, 4, 10)))
-    assert got == [date(2026, 2, 15), date(2026, 3, 15)]  # styczeĹ„ przed startem, kwiecieĹ„ jeszcze nie nadszedĹ‚
+    assert got == [date(2026, 2, 15), date(2026, 3, 15)]  # styczeń przed startem, kwiecień jeszcze nie nadszedł
     assert list(due_dates(15, date(2026, 1, 20), None, date(2026, 4, 15)))[-1] == date(2026, 4, 15)
 
 
@@ -24,7 +24,7 @@ def test_due_dates_never_repeat_after_generated_through():
     start, now = date(2026, 1, 1), date(2026, 4, 20)
     first = list(due_dates(5, start, None, now))
     assert first == [date(2026, 1, 5), date(2026, 2, 5), date(2026, 3, 5), date(2026, 4, 5)]
-    assert list(due_dates(5, start, now, now)) == []  # ponowne wywoĹ‚anie po dopisaniu nic nie daje
+    assert list(due_dates(5, start, now, now)) == []  # ponowne wywołanie po dopisaniu nic nie daje
     assert list(due_dates(5, start, date(2026, 2, 5), now)) == [date(2026, 3, 5), date(2026, 4, 5)]
 
 
@@ -46,25 +46,25 @@ def _template(**over):
 def test_recurring_expense_appears_in_ledger_and_reduces_budget(client):
     auth = _register(client, "rec@b.pl")
     client.put("/api/v1/profile", json=PROFILE, headers=auth)
-    start = add_months(today().replace(day=1), -2)  # dwa miesiÄ…ce wstecz, termin 1. dnia miesiÄ…ca
+    start = add_months(today().replace(day=1), -2)  # dwa miesiące wstecz, termin 1. dnia miesiąca
     _, res = client.post("/api/v1/recurring-expenses", json=_template(start_date=start.isoformat()), headers=auth)
     assert res.status == 201 and res.json["day_of_month"] == 1
 
-    _, res = client.get("/api/v1/expenses", headers=auth)  # bieĹĽÄ…cy miesiÄ…c
+    _, res = client.get("/api/v1/expenses", headers=auth)  # bieżący miesiąc
     items = res.json["items"]
     assert [(e["note"], e["amount"], e["source_type"]) for e in items] == [("Czynsz", 2000, "RECURRING")]
     assert res.json["totals"]["NEEDS"] == 2000
 
-    # idempotentnie: kolejne odczyty nie dopisujÄ… duplikatĂłw
+    # idempotentnie: kolejne odczyty nie dopisują duplikatów
     for _ in range(3):
         client.get("/api/v1/expenses", headers=auth)
         client.get("/api/v1/budget", headers=auth)
     _, res = client.get("/api/v1/expenses", headers=auth)
     assert len(res.json["items"]) == 1
     _, res = client.get("/api/v1/expenses/summary?months=3", headers=auth)
-    assert [m["total"] for m in res.json["months"]] == [2000, 2000, 2000]  # trzy miesiÄ…ce z wpisem
+    assert [m["total"] for m in res.json["months"]] == [2000, 2000, 2000]  # trzy miesiące z wpisem
 
-    # wydatek zmniejsza dostÄ™pny budĹĽet kategorii
+    # wydatek zmniejsza dostępny budżet kategorii
     _, res = client.get("/api/v1/budget", headers=auth)
     assert res.json["spent"]["NEEDS"] == 2000
 
@@ -92,11 +92,11 @@ def test_disabled_template_generates_nothing_and_reenable_does_not_backfill(clie
     _, res = client.get("/api/v1/expenses", headers=auth)
     assert res.json["items"] == []
     _, res = client.get("/api/v1/recurring-expenses", headers=auth)
-    assert res.json["monthly_total"] == 0  # wyĹ‚Ä…czony szablon nie liczy siÄ™ do sumy
+    assert res.json["monthly_total"] == 0  # wyłączony szablon nie liczy się do sumy
 
     client.put(f"/api/v1/recurring-expenses/{tid}", json=_template(active=True, start_date=start), headers=auth)
     _, res = client.get("/api/v1/expenses/summary?months=6", headers=auth)
-    assert all(m["total"] == 0 for m in res.json["months"])  # okres wyĹ‚Ä…czenia nie zostaĹ‚ dopisany
+    assert all(m["total"] == 0 for m in res.json["months"])  # okres wyłączenia nie został dopisany
 
 
 def test_deleting_generated_entry_is_not_regenerated_and_template_delete_keeps_entries(client):
@@ -158,11 +158,11 @@ def test_pay_loan_installment_creates_needs_entry_once_per_month(client):
 
     _, res = client.get("/api/v1/expenses", headers=auth)
     assert [e["note"] for e in res.json["items"]] == ["Rata: Kredyt auto"]
-    assert res.json["total"] == 0 and res.json["loan_payments"] == 800  # rata nie liczy siÄ™ podwĂłjnie
+    assert res.json["total"] == 0 and res.json["loan_payments"] == 800  # rata nie liczy się podwójnie
     _, after = client.get("/api/v1/budget", headers=auth)
     assert (after.json["spent"]["NEEDS"], after.json["available"]["NEEDS"]) == needs_before
 
-    # inny miesiÄ…c: moĹĽna zapĹ‚aciÄ‡ ponownie; cofniÄ™cie wpisu odblokowuje miesiÄ…c
+    # inny miesiąc: można zapłacić ponownie; cofnięcie wpisu odblokowuje miesiąc
     prev = add_months(today().replace(day=10), -1).isoformat()
     assert client.post(f"/api/v1/budget/loans/{loan_id}/pay", json={"paid_on": prev}, headers=auth)[1].status == 201
 
