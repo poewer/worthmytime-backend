@@ -134,6 +134,19 @@ class ExpenseIn(BaseModel):
     spent_on: date | None = None  # domyślnie dziś
 
 
+class RecurringIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    category: Category
+    amount: float = Field(gt=0, le=1_000_000_000)
+    day_of_month: int = Field(ge=1, le=31)  # w krótszych miesiącach płatność wypada w ostatnim dniu
+    active: bool = True
+    start_date: date | None = None  # domyślnie dziś; wcześniejsza data dopisze zaległe wpisy
+
+
+class LoanPaymentIn(BaseModel):
+    paid_on: date | None = None  # domyślnie dziś
+
+
 class WishIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     price: float = Field(gt=0, le=1_000_000_000)

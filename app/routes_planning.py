@@ -8,8 +8,17 @@ from sqlalchemy import select
 from . import calc
 from .errors import ApiError
 from .forecast import forecast
-from .helpers import load_plan, login_required, ok, parse, rate_from_user, today
-from .models import Expense, SavingsGoal, User, WishlistItem
+from .helpers import (
+    NOT_LOAN_PAYMENT,
+    load_plan,
+    login_required,
+    materialize_recurring,
+    ok,
+    parse,
+    rate_from_user,
+    today,
+)
+from .models import BudgetLoan, Expense, RecurringExpense, SavingsGoal, User, WishlistItem
 from .planning import (
     goal_view,
     last_periods,
@@ -21,7 +30,7 @@ from .planning import (
     wish_stats,
     wish_view,
 )
-from .schemas import Category, DecisionIn, DepositIn, ExpenseIn, GoalIn, WishIn
+from .schemas import Category, DecisionIn, DepositIn, ExpenseIn, GoalIn, LoanPaymentIn, RecurringIn, WishIn
 
 bp = Blueprint("planning", url_prefix="/api/v1")
 
@@ -66,6 +75,8 @@ def _expense(e: Expense) -> dict:
         "amount": e.amount,
         "note": e.note,
         "spent_on": e.spent_on.isoformat(),
+        "source_type": e.source_type,
+        "source_id": e.source_id,
     }
 
 
@@ -82,6 +93,7 @@ def _period_arg(request: Request) -> str:
 @login_required
 async def list_expenses(request: Request):
     period = _period_arg(request)
+    await materialize_recurring(request, request.ctx.user)
     start, end = month_bounds(period)
     rows = list(
         await request.ctx.db.scalars(
@@ -90,13 +102,16 @@ async def list_expenses(request: Request):
             .order_by(Expense.spent_on.desc(), Expense.created_at.desc())
         )
     )
-    totals = totals_by_category((e.category, e.amount) for e in rows)
+    # opłacone raty są na liście, ale nie wchodzą do sum (rata jest już zobowiązaniem w Potrzebach)
+    totals = totals_by_category((e.category, e.amount) for e in rows if e.source_type != "LOAN")
+    loan_payments = round(sum(e.amount for e in rows if e.source_type == "LOAN"), 2)
     return ok(
         {
             "month": period,
             "items": [_expense(e) for e in rows],
             "totals": totals,
             "total": round(sum(totals.values()), 2),
+            "loan_payments": loan_payments,
         }
     )
 
@@ -133,14 +148,121 @@ async def expenses_summary(request: Request):
         months = max(1, min(24, int(request.args.get("months", 6))))
     except ValueError:
         raise ApiError("Parametr months musi być liczbą", 422)
+    await materialize_recurring(request, request.ctx.user)
     periods = last_periods(today(), months)
     start, _ = month_bounds(periods[0])
     rows = await request.ctx.db.execute(
         select(Expense.spent_on, Expense.category, Expense.amount).where(
-            Expense.user_id == request.ctx.user.id, Expense.spent_on >= start
+            Expense.user_id == request.ctx.user.id, Expense.spent_on >= start, NOT_LOAN_PAYMENT
         )
     )
     return ok({"months": monthly_summary(rows.all(), periods)})
+
+
+# ---------- stałe wydatki ----------
+
+
+def _recurring(t: RecurringExpense) -> dict:
+    return {
+        "id": t.id,
+        "name": t.name,
+        "category": t.category,
+        "amount": t.amount,
+        "day_of_month": t.day_of_month,
+        "active": t.active,
+        "start_date": t.start_date.isoformat(),
+    }
+
+
+@bp.get("/recurring-expenses")
+@login_required
+async def list_recurring(request: Request):
+    rows = await request.ctx.db.scalars(
+        select(RecurringExpense)
+        .where(RecurringExpense.user_id == request.ctx.user.id)
+        .order_by(RecurringExpense.day_of_month, RecurringExpense.created_at)
+    )
+    items = [_recurring(t) for t in rows]
+    active = [t for t in items if t["active"]]
+    return ok({"items": items, "monthly_total": round(sum(t["amount"] for t in active), 2)})
+
+
+@bp.post("/recurring-expenses")
+@login_required
+async def add_recurring(request: Request):
+    data = parse(RecurringIn, request)
+    now = today()
+    t = RecurringExpense(
+        user_id=request.ctx.user.id,
+        name=data.name,
+        category=data.category.value,
+        amount=data.amount,
+        day_of_month=data.day_of_month,
+        active=data.active,
+        start_date=data.start_date or now,
+    )
+    request.ctx.db.add(t)
+    await request.ctx.db.commit()
+    await materialize_recurring(request, request.ctx.user)  # zaległe wpisy od start_date pojawiają się od razu
+    return ok(_recurring(t), 201)
+
+
+@bp.put("/recurring-expenses/<template_id:str>")
+@login_required
+async def update_recurring(request: Request, template_id: str):
+    data = parse(RecurringIn, request)
+    t = await _own(request, RecurringExpense, template_id, request.ctx.user, "stałego wydatku")
+    if data.active and not t.active:
+        t.generated_through = today()  # po ponownym włączeniu nie dopisujemy okresu wyłączenia
+    t.name, t.category, t.amount = data.name, data.category.value, data.amount
+    t.day_of_month, t.active = data.day_of_month, data.active
+    await request.ctx.db.commit()
+    return ok(_recurring(t))
+
+
+@bp.delete("/recurring-expenses/<template_id:str>")
+@login_required
+async def delete_recurring(request: Request, template_id: str):
+    t = await _own(request, RecurringExpense, template_id, request.ctx.user, "stałego wydatku")
+    await request.ctx.db.delete(t)  # wpisy już dopisane do rejestru zostają
+    await request.ctx.db.commit()
+    return ok({"deleted": True})
+
+
+# ---------- spłata rat ----------
+
+
+@bp.post("/budget/loans/<loan_id:str>/pay")
+@login_required
+async def pay_loan_installment(request: Request, loan_id: str):
+    """Oznacza ratę kredytu jako opłaconą w danym miesiącu i zapisuje ją w rejestrze (Potrzeby)."""
+    data = parse(LoanPaymentIn, request)
+    loan = await _own(request, BudgetLoan, loan_id, request.ctx.user, "kredytu")
+    paid_on = data.paid_on or today()
+    start, end = month_bounds(period_of(paid_on))
+    already = await request.ctx.db.scalar(
+        select(Expense.id).where(
+            Expense.user_id == request.ctx.user.id,
+            Expense.source_type == "LOAN",
+            Expense.source_id == loan.id,
+            Expense.spent_on >= start,
+            Expense.spent_on < end,
+        )
+    )
+    if already:
+        raise ApiError("Rata za ten miesiąc jest już oznaczona jako opłacona", 409)
+    e = Expense(
+        user_id=request.ctx.user.id,
+        category="NEEDS",
+        amount=loan.installment_amount,
+        note=f"Rata: {loan.name}",
+        spent_on=paid_on,
+        source_type="LOAN",
+        source_id=loan.id,
+    )
+    request.ctx.db.add(e)
+    await request.ctx.db.commit()
+    return ok(_expense(e), 201)
 
 
 # ---------- lista życzeń ----------

@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -134,6 +134,30 @@ class Expense(Base):
     amount: Mapped[float] = mapped_column(Float)
     note: Mapped[str | None] = mapped_column(String(200), nullable=True)
     spent_on: Mapped[date] = mapped_column(Date, index=True)
+    # pochodzenie wpisu: RECURRING (szablon stałego wydatku) lub LOAN (opłacona rata); brak = wpis ręczny
+    source_type: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    # to samo źródło nie może dopisać dwóch wpisów z tym samym terminem (idempotentne generowanie)
+    __table_args__ = (UniqueConstraint("source_type", "source_id", "spent_on", name="uq_expense_source_date"),)
+
+
+class RecurringExpense(Base):
+    """Szablon stałego wydatku: wpis w rejestrze powstaje automatycznie w dniu płatności co miesiąc."""
+
+    __tablename__ = "recurring_expenses"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    category: Mapped[str] = mapped_column(String(10))
+    amount: Mapped[float] = mapped_column(Float)
+    day_of_month: Mapped[int] = mapped_column(Integer)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    start_date: Mapped[date] = mapped_column(Date)
+    # ostatni dzień, do którego wpisy zostały już wygenerowane (nie generujemy ich ponownie)
+    generated_through: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

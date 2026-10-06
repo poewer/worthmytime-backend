@@ -5,14 +5,16 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 from sanic import Request
 from sanic.response import json as json_response
-from sqlalchemy import select
+from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 
 from . import calc
 from .budget import BudgetPlan, analyze, loan_view
 from .config import settings
 from .errors import ApiError
-from .models import Budget, BudgetLoan, Calculation, Cost, Expense, User
+from .models import Budget, BudgetLoan, Calculation, Cost, Expense, RecurringExpense, User
 from .planning import month_bounds, period_of, remaining_installments, totals_by_category
+from .recurring import due_dates
 from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, LoanIn, ProfileIn
 from .security import decode_token
 
@@ -239,13 +241,57 @@ def today() -> date:
 
 async def load_ledger(request: Request, user: User, period: str) -> dict[str, float]:
     """Sumy wydatków z rejestru w danym miesiącu per kategoria."""
+    await materialize_recurring(request, user)
     start, end = month_bounds(period)
     rows = await request.ctx.db.execute(
         select(Expense.category, Expense.amount).where(
-            Expense.user_id == user.id, Expense.spent_on >= start, Expense.spent_on < end
+            Expense.user_id == user.id,
+            Expense.spent_on >= start,
+            Expense.spent_on < end,
+            NOT_LOAN_PAYMENT,  # rata jest już zobowiązaniem w Potrzebach, więc nie liczymy jej drugi raz
         )
     )
     return totals_by_category((c, a) for c, a in rows)
+
+
+NOT_LOAN_PAYMENT = or_(Expense.source_type.is_(None), Expense.source_type != "LOAN")
+
+
+async def materialize_recurring(request: Request, user: User) -> int:
+    """Dopisuje do rejestru brakujące wpisy ze stałych wydatków (leniwie, bez crona). Zwraca liczbę nowych wpisów."""
+    db, now = request.ctx.db, today()
+    templates = list(
+        await db.scalars(
+            select(RecurringExpense).where(
+                RecurringExpense.user_id == user.id,
+                RecurringExpense.active.is_(True),
+                or_(RecurringExpense.generated_through.is_(None), RecurringExpense.generated_through < now),
+            )
+        )
+    )
+    created = 0
+    for t in templates:
+        for due in due_dates(t.day_of_month, t.start_date, t.generated_through, now):
+            db.add(
+                Expense(
+                    user_id=user.id,
+                    category=t.category,
+                    amount=t.amount,
+                    note=t.name,
+                    spent_on=due,
+                    source_type="RECURRING",
+                    source_id=t.id,
+                )
+            )
+            created += 1
+        t.generated_through = now
+    if templates:
+        try:
+            await db.commit()
+        except IntegrityError:  # równoległe żądanie dopisało już te same wpisy
+            await db.rollback()
+            return 0
+    return created
 
 
 async def load_plan(request: Request, user: User, monthly_income: float) -> BudgetPlan:
