@@ -2,7 +2,7 @@ name: PR policy
 
 # Egzekwuje metodologię: issue = branch = pull request = merge = zamknięcie zadania = usunięcie brancha.
 # Sprawdza, że branch ma nazwę <typ>/<numer-issue>-<opis>, a opis PR zamyka dokładnie to issue.
-# PR wydaniowe: do stage tylko z dev, do main tylko ze stage (bez wymogu issue).
+# PR wydaniowe: do stage tylko z dev, do main tylko ze stage (bez wymogu issue); synchronizacja wsteczna main -> dev i main -> stage.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
@@ -23,8 +23,14 @@ jobs:
             const branch = pr.head.ref;
             const fail = (msg) => core.setFailed(msg);
 
-            // PR wydaniowe: do stage wchodzi tylko dev, do main tylko stage (bez własnego issue)
+            // PR wydaniowe: do stage wchodzi tylko dev, do main tylko stage (bez własnego issue).
+            // Po wydaniu na main synchronizujemy wstecz: main -> stage i main -> dev, żeby dev i stage
+            // nigdy nie były w tyle za main.
             const base = pr.base.ref;
+            if (branch === "main" && (base === "stage" || base === "dev")) {
+              core.info(`OK: synchronizacja wsteczna main -> ${base}`);
+              return;
+            }
             if (base === "stage" || base === "main") {
               const expected = base === "stage" ? "dev" : "stage";
               if (branch !== expected) {
