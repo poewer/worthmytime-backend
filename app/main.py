@@ -13,6 +13,7 @@ from .logging_config import setup_logging
 from .models import Base
 from .ratelimit import Limits, RateLimiter
 from .routes import bp
+from .routes_account import bp as account_bp
 from .routes_planning import bp as planning_bp
 
 log = setup_logging()
@@ -32,7 +33,7 @@ def create_app(database_url: str | None = None, create_schema: bool = False, lim
                 log.error("Konfiguracja: %s", p)
             raise RuntimeError("Niepoprawna konfiguracja produkcyjna: " + "; ".join(problems))
         if "*" in settings.cors_origin_list:
-            log.warning("CORS_ORIGINS=* na produkcji - ustaw listę domen frontendu")
+            log.warning("CORS_ORIGINS=* na produkcji - ustaw listÄ™ domen frontendu")
     app = Sanic("worthmytime", configure_logging=True)
     app.config.FALLBACK_ERROR_FORMAT = "json"
     origins = settings.cors_origin_list
@@ -120,6 +121,7 @@ def create_app(database_url: str | None = None, create_schema: bool = False, lim
 
     app.blueprint(bp)
     app.blueprint(planning_bp)
+    app.blueprint(account_bp)
     return app
 
 
@@ -127,3 +129,4 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(host=settings.host, port=settings.port, debug=settings.debug, single_process=True)
+
