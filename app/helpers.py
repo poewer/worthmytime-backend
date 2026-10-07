@@ -5,17 +5,31 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 from sanic import Request
 from sanic.response import json as json_response
-from sqlalchemy import select
+from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 
 from . import calc
 from .budget import BudgetPlan, analyze, loan_view
+from .config import settings
 from .errors import ApiError
-from .models import Budget, BudgetLoan, Calculation, Cost, Expense, User
+from .models import Budget, BudgetLoan, Calculation, Cost, Expense, RecurringExpense, User
+from .money import rnd
 from .planning import month_bounds, period_of, remaining_installments, totals_by_category
+from .recurring import due_dates
 from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, LoanIn, ProfileIn
 from .security import decode_token
+from .session import SAFE_METHODS, csrf_valid, session_token
 
 M = TypeVar("M", bound=BaseModel)
+
+
+def client_ip(request: Request) -> str:
+    """Adres klienta; X-Forwarded-For tylko gdy API stoi za zaufanym reverse proxy (TRUST_PROXY=true)."""
+    if settings.trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.remote_addr or request.ip
 
 
 def parse(model: type[M], request: Request) -> M:
@@ -38,9 +52,13 @@ def ok(data, status: int = 200):
 
 async def current_user(request: Request) -> User | None:
     header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None
-    user_id = decode_token(header[7:])
+    if header.startswith("Bearer "):
+        user_id = decode_token(header[7:])  # nagłówek nie jest wysyłany automatycznie, więc bez CSRF
+    else:
+        cookie = session_token(request)
+        user_id = decode_token(cookie) if cookie else None
+        if user_id and request.method not in SAFE_METHODS and not csrf_valid(request):
+            raise ApiError("Nieprawidłowy token CSRF", 403)
     return await request.ctx.db.get(User, user_id) if user_id else None
 
 
@@ -77,17 +95,17 @@ def _rate_breakdown(user: User) -> dict:
     if user.hourly_rate is None and user.monthly_income is None:
         return {"nominal_hourly_rate": None, "real_hourly_rate": None}
     r = rate_from_user(user)
-    return {"nominal_hourly_rate": round(r.nominal_rate, 2), "real_hourly_rate": round(r.real_rate, 2)}
+    return {"nominal_hourly_rate": rnd(r.nominal_rate, 2), "real_hourly_rate": rnd(r.real_rate, 2)}
 
 
 def _effective_rate(user: User) -> float | None:
     if user.hourly_rate is None and user.monthly_income is None:
         return None
-    return round(rate_from_user(user).hourly_rate, 2)
+    return rnd(rate_from_user(user).hourly_rate, 2)
 
 
 def _effective_hours_month(user: User) -> float:
-    return round(calc.WorkRate(1, user.hours_per_day, user.days_per_week).hours_per_month, 2)
+    return rnd(calc.WorkRate(1, user.hours_per_day, user.days_per_week).hours_per_month, 2)
 
 
 def rate_from_user(user: User) -> calc.WorkRate:
@@ -174,7 +192,7 @@ def _loan_totals(loans: list[LoanIn] | list[BudgetLoan]) -> dict:
     left = [remaining_installments(now, x.installments_left, x.end_date, x.payment_day) for x in loans]
     active = [(x.installment_amount, n) for x, n in zip(loans, left, strict=True) if n > 0]
     return {
-        "monthly_loans": round(sum(a for a, _ in active), 2),
+        "monthly_loans": rnd(sum(a for a, _ in active), 2),
         "loans_count": len(active),
         "last_installment_in_months": max((n for _, n in active), default=0),
     }
@@ -203,7 +221,7 @@ def plan_from_row(
     """Wydane w kategorii = suma wpisów z rejestru wydatków w bieżącym miesiącu (jedyne źródło "wydane")."""
     loans = loans or []
     ledger = ledger or {}
-    spent = {c: round(ledger.get(c.value, 0.0), 2) for c in CATEGORIES}
+    spent = {c: rnd(ledger.get(c.value, 0.0), 2) for c in CATEGORIES}
     if row is None:
         # kredyty i wpisy z rejestru obowiązują także bez ustawionych procentów - to realne liczby
         return BudgetPlan(monthly_income=monthly_income, spent=spent, **_loan_totals(loans))
@@ -229,13 +247,57 @@ def today() -> date:
 
 async def load_ledger(request: Request, user: User, period: str) -> dict[str, float]:
     """Sumy wydatków z rejestru w danym miesiącu per kategoria."""
+    await materialize_recurring(request, user)
     start, end = month_bounds(period)
     rows = await request.ctx.db.execute(
         select(Expense.category, Expense.amount).where(
-            Expense.user_id == user.id, Expense.spent_on >= start, Expense.spent_on < end
+            Expense.user_id == user.id,
+            Expense.spent_on >= start,
+            Expense.spent_on < end,
+            NOT_LOAN_PAYMENT,  # rata jest już zobowiązaniem w Potrzebach, więc nie liczymy jej drugi raz
         )
     )
     return totals_by_category((c, a) for c, a in rows)
+
+
+NOT_LOAN_PAYMENT = or_(Expense.source_type.is_(None), Expense.source_type != "LOAN")
+
+
+async def materialize_recurring(request: Request, user: User) -> int:
+    """Dopisuje do rejestru brakujące wpisy ze stałych wydatków (leniwie, bez crona). Zwraca liczbę nowych wpisów."""
+    db, now = request.ctx.db, today()
+    templates = list(
+        await db.scalars(
+            select(RecurringExpense).where(
+                RecurringExpense.user_id == user.id,
+                RecurringExpense.active.is_(True),
+                or_(RecurringExpense.generated_through.is_(None), RecurringExpense.generated_through < now),
+            )
+        )
+    )
+    created = 0
+    for t in templates:
+        for due in due_dates(t.day_of_month, t.start_date, t.generated_through, now):
+            db.add(
+                Expense(
+                    user_id=user.id,
+                    category=t.category,
+                    amount=t.amount,
+                    note=t.name,
+                    spent_on=due,
+                    source_type="RECURRING",
+                    source_id=t.id,
+                )
+            )
+            created += 1
+        t.generated_through = now
+    if templates:
+        try:
+            await db.commit()
+        except IntegrityError:  # równoległe żądanie dopisało już te same wpisy
+            await db.rollback()
+            return 0
+    return created
 
 
 async def load_plan(request: Request, user: User, monthly_income: float) -> BudgetPlan:
@@ -280,14 +342,14 @@ def serialize_budget(
             for x in loans
         ],
         "monthly_loans": plan.monthly_loans,
-        "loans_income_percent": round(plan.monthly_loans / monthly_income * 100, 1) if monthly_income else None,
+        "loans_income_percent": rnd(plan.monthly_loans / monthly_income * 100, 1) if monthly_income else None,
         "last_installment_in_months": plan.last_installment_in_months,
         "percentages": {c.value: plan.percentages[c] for c in CATEGORIES},
         # wydane w kategoriach pochodzą wyłącznie z rejestru wydatków (bieżący miesiąc)
         "spent": {c.value: plan.spent[c] for c in CATEGORIES},
         "amounts": {c.value: plan.category_budget(c) for c in CATEGORIES} if monthly_income else None,
         "available": {c.value: plan.available(c) for c in CATEGORIES} if monthly_income else None,
-        "monthly_income": round(monthly_income, 2) if monthly_income else None,
+        "monthly_income": rnd(monthly_income, 2) if monthly_income else None,
         "total_spent": plan.total_spent,
         "is_custom": row is not None,
     }

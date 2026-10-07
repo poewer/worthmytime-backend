@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from .calc import OCCURRENCES_PER_YEAR
+from .money import rnd
 from .planning import last_payment_date, next_payment_date, remaining_installments, repayment_progress
 from .schemas import CATEGORIES, DEFAULT_PERCENTAGES, CalculationIn, Category, Frequency
 
@@ -39,17 +40,17 @@ class BudgetPlan:
 
     def effective_spent(self, category: Category) -> float:
         extra = self.monthly_loans if category == Category.NEEDS else 0.0
-        return round(self.spent[category] + extra, 2)
+        return rnd(self.spent[category] + extra, 2)
 
     def category_budget(self, category: Category) -> float:
-        return round(self.monthly_income * self.percentages[category] / 100, 2)
+        return rnd(self.monthly_income * self.percentages[category] / 100, 2)
 
     def available(self, category: Category) -> float:
-        return round(self.category_budget(category) - self.effective_spent(category), 2)
+        return rnd(self.category_budget(category) - self.effective_spent(category), 2)
 
     @property
     def total_spent(self) -> float:
-        return round(sum(self.spent.values()) + self.monthly_loans, 2)
+        return rnd(sum(self.spent.values()) + self.monthly_loans, 2)
 
 
 @dataclass(frozen=True)
@@ -68,11 +69,11 @@ def split_costs(calc: CalculationIn) -> Costs:
             upfront += c.amount
         else:
             monthly += c.amount * OCCURRENCES_PER_YEAR[c.frequency] / 12
-    return Costs(round(upfront, 2), round(monthly, 2))
+    return Costs(rnd(upfront, 2), rnd(monthly, 2))
 
 
 def _pct(part: float, whole: float) -> float | None:
-    return round(part / whole * 100, 1) if whole > 0 else None
+    return rnd(part / whole * 100, 1) if whole > 0 else None
 
 
 # --- reguły ostrzeżeń -------------------------------------------------------------------------
@@ -92,9 +93,9 @@ def rule_upfront_exceeds_category(category: Category, budget: float, spent: floa
         "CATEGORY_BUDGET_EXCEEDED",
         level,
         category=category.value,
-        overrun=round(projected - budget, 2),
+        overrun=rnd(projected - budget, 2),
         projected_usage_percent=_pct(projected, budget),
-        available=round(budget - spent, 2),
+        available=rnd(budget - spent, 2),
     )
 
 
@@ -108,8 +109,8 @@ def rule_monthly_exceeds_category(category: Category, budget: float, spent: floa
         level,
         category=category.value,
         monthly_cost=monthly,
-        available=round(budget - spent, 2),
-        overrun=round(spent + monthly - budget, 2),
+        available=rnd(budget - spent, 2),
+        overrun=rnd(spent + monthly - budget, 2),
     )
 
 
@@ -121,7 +122,7 @@ def rule_category_tight(category: Category, budget: float, spent: float, upfront
     usage = projected / budget * 100
     if usage < TIGHT_USAGE_PERCENT:
         return None
-    return warning("CATEGORY_BUDGET_TIGHT", INFO, category=category.value, projected_usage_percent=round(usage, 1))
+    return warning("CATEGORY_BUDGET_TIGHT", INFO, category=category.value, projected_usage_percent=rnd(usage, 1))
 
 
 def rule_budget_deficit(plan: BudgetPlan, upfront: float, monthly: float) -> dict | None:
@@ -132,9 +133,9 @@ def rule_budget_deficit(plan: BudgetPlan, upfront: float, monthly: float) -> dic
     return warning(
         "BUDGET_DEFICIT",
         CRITICAL,
-        deficit=round(planned - plan.monthly_income, 2),
-        planned_expenses=round(planned, 2),
-        monthly_income=round(plan.monthly_income, 2),
+        deficit=rnd(planned - plan.monthly_income, 2),
+        planned_expenses=rnd(planned, 2),
+        monthly_income=rnd(plan.monthly_income, 2),
     )
 
 
@@ -156,9 +157,9 @@ def rule_loans_exceed_needs(plan: BudgetPlan) -> dict | None:
     return warning(
         "LOANS_EXCEED_NEEDS_BUDGET",
         CRITICAL,
-        monthly_loans=round(plan.monthly_loans, 2),
+        monthly_loans=rnd(plan.monthly_loans, 2),
         needs_budget=needs_budget,
-        overrun=round(plan.monthly_loans - needs_budget, 2),
+        overrun=rnd(plan.monthly_loans - needs_budget, 2),
     )
 
 
@@ -174,9 +175,9 @@ def rule_contribution_exceeds_available(
         "CONTRIBUTION_EXCEEDS_AVAILABLE",
         level,
         category=category.value,
-        planned=round(planned, 2),
-        max_monthly=round(maximum, 2),
-        overrun=round(planned - maximum, 2),
+        planned=rnd(planned, 2),
+        max_monthly=rnd(maximum, 2),
+        overrun=rnd(planned - maximum, 2),
     )
 
 
@@ -184,7 +185,7 @@ def rule_no_free_budget(category: Category, available: float, has_goal: bool) ->
     """NO_FREE_BUDGET: w kategorii nie zostało nic wolnego, więc nie ma z czego odkładać w tym miesiącu."""
     if not has_goal or available > 0:
         return None
-    return warning("NO_FREE_BUDGET", WARNING, category=category.value, available=round(available, 2))
+    return warning("NO_FREE_BUDGET", WARNING, category=category.value, available=rnd(available, 2))
 
 
 def rule_no_budget_data(plan: BudgetPlan) -> dict | None:
@@ -214,7 +215,7 @@ def loan_view(
     """
     now = today or date.today()
     left = remaining_installments(now, left, end_date, payment_day)
-    remaining = round(installment * left, 2)
+    remaining = rnd(installment * left, 2)
     due_day = payment_day or (end_date.day if end_date else now.day)
     next_due = next_payment_date(now, due_day) if left > 0 else None
     last_due = last_payment_date(now, left, payment_day, end_date)
@@ -233,7 +234,7 @@ def loan_view(
         "repayment_progress_percent": repayment_progress(start_date, end_date, now),
         "remaining_to_pay": remaining,
         "income_percent": _pct(installment, plan.monthly_income),
-        "remaining_work_hours": round(remaining / hourly_rate, 1) if hourly_rate else None,
+        "remaining_work_hours": rnd(remaining / hourly_rate, 1) if hourly_rate else None,
     }
 
 
@@ -241,7 +242,7 @@ def months_to_goal(remaining: float, contribution: float) -> float | None:
     """Sekcja 11: (cena - odłożone) / miesięczna wpłata."""
     if contribution <= 0:
         return None
-    return round(max(0.0, remaining) / contribution, 1)
+    return rnd(max(0.0, remaining) / contribution, 1)
 
 
 def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
@@ -253,7 +254,7 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
     costs = split_costs(calc)
     budget = plan.category_budget(category)
     spent = plan.effective_spent(category)  # dla NEEDS razem z ratami kredytów
-    available = round(budget - spent, 2)
+    available = rnd(budget - spent, 2)
 
     result: dict = {
         "category": category.value,
@@ -265,7 +266,7 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
         "usage_percent": _pct(spent, budget),
         "is_custom": plan.is_custom,
         "obligations": {
-            "monthly_installments": round(plan.monthly_loans, 2),
+            "monthly_installments": rnd(plan.monthly_loans, 2),
             "loans_count": plan.loans_count,
             "income_percent": _pct(plan.monthly_loans, plan.monthly_income),
             "last_installment_in_months": plan.last_installment_in_months,
@@ -278,9 +279,9 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
     }
 
     if costs.upfront > 0:
-        projected = round(spent + costs.upfront, 2)
+        projected = rnd(spent + costs.upfront, 2)
         # ile maksymalnie można miesięcznie przeznaczyć na ten wydatek: wolne środki kategorii w tym miesiącu
-        max_monthly = round(max(available, 0.0), 2)
+        max_monthly = rnd(max(available, 0.0), 2)
         planned = calc.monthly_contribution  # plan użytkownika; bez niego zakładamy maksimum
         contribution = planned if planned is not None else max_monthly
         result["upfront"] = {
@@ -293,7 +294,7 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
             "months_to_goal_full": math.ceil(max(0.0, costs.upfront - calc.already_saved) / contribution)
             if contribution > 0
             else None,
-            "monthly_contribution": round(contribution, 2),
+            "monthly_contribution": rnd(contribution, 2),
             "max_monthly_contribution": max_monthly,
             "contribution_source": "USER" if planned is not None else "CATEGORY_AVAILABLE",
             "already_saved": calc.already_saved,
@@ -303,7 +304,7 @@ def analyze(calc: CalculationIn, plan: BudgetPlan) -> dict | None:
     if costs.monthly > 0:
         result["monthly"] = {
             "cost": costs.monthly,
-            "projected_spent": round(spent + costs.monthly, 2),
+            "projected_spent": rnd(spent + costs.monthly, 2),
             "projected_usage_percent": _pct(spent + costs.monthly, budget),
             "share_percent": _pct(costs.monthly, budget),
             "income_percent": _pct(costs.monthly, plan.monthly_income),

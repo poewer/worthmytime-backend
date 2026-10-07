@@ -17,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "openapi-spec-validator>=0.9.0",
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "ruff>=0.16.10",
@@ -35,6 +36,10 @@ extend-exclude = ["migrations/versions"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 ignore = ["UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+# tabela opisów endpointów: długie, opisowe linie
+"app/openapi.py" = ["E501"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

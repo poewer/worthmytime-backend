@@ -1,0 +1,37 @@
+name: Uptime
+
+# Zewnętrzny monitoring dostępności: co 10 minut odpytuje /api/v1/health.
+# Przy awarii przebieg kończy się błędem, a GitHub powiadamia właściciela repozytorium.
+# Adres ustaw w Settings > Secrets and variables > Actions > Variables jako HEALTH_URL
+# (np. https://api.example.com/api/v1/health). Bez zmiennej workflow tylko się pomija.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sprawdź /health
+        env:
+          HEALTH_URL: ${{ vars.HEALTH_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "::notice::Brak zmiennej HEALTH_URL, monitoring pominięty"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            code="$(curl -s -o /tmp/health.json -w '%{http_code}' --max-time 15 "$HEALTH_URL" || echo 000)"
+            if [ "$code" = "200" ] && grep -q '"status": *"ok"' /tmp/health.json; then
+              echo "OK ($code): $(cat /tmp/health.json)"
+              exit 0
+            fi
+            echo "Próba $attempt: HTTP $code $(cat /tmp/health.json 2>/dev/null)"
+            sleep 20
+          done
+          echo "::error::Aplikacja niedostępna lub baza nie odpowiada ($HEALTH_URL)"
+          exit 1

@@ -1,8 +1,8 @@
 import secrets
 
 from sanic import Blueprint, Request
-from sanic.response import empty
-from sqlalchemy import select, text
+from sanic.response import empty, html
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from . import calc
@@ -10,6 +10,7 @@ from .budget import analyze
 from .errors import ApiError
 from .helpers import (
     apply_input,
+    client_ip,
     current_user,
     load_ledger,
     load_loans,
@@ -28,9 +29,13 @@ from .helpers import (
     user_profile,
 )
 from .models import Budget, BudgetLoan, Calculation, User
+from .money import rnd
+from .openapi import SWAGGER_UI_HTML, build_spec
+from .pagination import encode_cursor, escape_like, parse_list_params
 from .planning import period_of, remaining_installments
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
-from .security import create_token, hash_password, verify_password
+from .security import create_token, decode_token, hash_password, verify_password
+from .session import clear_session_cookies, set_session_cookies
 
 bp = Blueprint("api", url_prefix="/api/v1")
 
@@ -39,6 +44,17 @@ bp = Blueprint("api", url_prefix="/api/v1")
 async def preflight(request: Request, path: str):
     # nagłówki CORS dokłada middleware on_response
     return empty(204)
+
+
+@bp.get("/openapi.json")
+async def openapi_json(request: Request):
+    """Specyfikacja OpenAPI 3.1 wygenerowana z modeli Pydantic i tabeli operacji w `app/openapi.py`."""
+    return ok(build_spec())
+
+
+@bp.get("/docs")
+async def swagger_ui(request: Request):
+    return html(SWAGGER_UI_HTML.replace("%(spec_url)s", "/api/v1/openapi.json"))
 
 
 @bp.get("/health")
@@ -53,8 +69,15 @@ async def health(request: Request):
 # ---------- auth ----------
 
 
+def _check_auth_rate(request: Request) -> None:
+    wait = request.app.ctx.limiter.check_auth(client_ip(request))
+    if wait:
+        raise ApiError("Zbyt wiele prób, spróbuj ponownie za chwilę", 429, headers={"Retry-After": str(wait)})
+
+
 @bp.post("/auth/register")
 async def register(request: Request):
+    _check_auth_rate(request)
     data = parse(Credentials, request)
     db = request.ctx.db
     user = User(email=data.email.lower(), password_hash=hash_password(data.password))
@@ -64,16 +87,42 @@ async def register(request: Request):
     except IntegrityError:
         await db.rollback()
         raise ApiError("Konto z tym adresem e-mail już istnieje", 409)
-    return ok({"token": create_token(user.id), "profile": user_profile(user)}, 201)
+    return set_session_cookies(ok({"token": create_token(user.id), "profile": user_profile(user)}, 201), user.id)
 
 
 @bp.post("/auth/login")
 async def login(request: Request):
+    _check_auth_rate(request)
     data = parse(Credentials, request)
+    limiter, ip = request.app.ctx.limiter, client_ip(request)
+    wait = limiter.login_blocked(ip, data.email)
+    if wait:
+        raise ApiError(
+            "Zbyt wiele nieudanych prób logowania, spróbuj ponownie później", 429, headers={"Retry-After": str(wait)}
+        )
     user = await request.ctx.db.scalar(select(User).where(User.email == data.email.lower()))
     if user is None or not verify_password(data.password, user.password_hash):
+        limiter.login_failed(ip, data.email)
         raise ApiError("Nieprawidłowy e-mail lub hasło", 401)
-    return ok({"token": create_token(user.id), "profile": user_profile(user)})
+    limiter.login_succeeded(ip, data.email)
+    return set_session_cookies(ok({"token": create_token(user.id), "profile": user_profile(user)}), user.id)
+
+
+@bp.post("/auth/logout")
+async def logout(request: Request):
+    """Czyści cookie sesji. Nie wymaga uwierzytelnienia, więc zawsze się udaje (wylogowanie jest idempotentne)."""
+    return clear_session_cookies(ok({"logged_out": True}))
+
+
+@bp.post("/auth/session")
+async def exchange_session(request: Request):
+    """Wymienia ważny token Bearer na cookie sesji (migracja zalogowanych z localStorage)."""
+    header = request.headers.get("Authorization", "")
+    user_id = decode_token(header[7:]) if header.startswith("Bearer ") else None
+    user = await request.ctx.db.get(User, user_id) if user_id else None
+    if user is None:
+        raise ApiError("Wymagane uwierzytelnienie", 401)
+    return set_session_cookies(ok({"profile": user_profile(user)}), user.id)
 
 
 @bp.get("/auth/me")
@@ -265,13 +314,42 @@ async def save_calculation(request: Request):
 @bp.get("/calculations")
 @login_required
 async def list_calculations(request: Request):
-    rows = await request.ctx.db.scalars(
-        select(Calculation)
-        .where(Calculation.user_id == request.ctx.user.id)
-        .order_by(Calculation.created_at.desc())
+    """Historia z paginacją: ?limit=&cursor=&q=&type=&category=&sort=created_desc|created_asc|name_asc|name_desc."""
+    params = parse_list_params({k: v[0] for k, v in request.args.items()})
+    user = request.ctx.user
+
+    where = [Calculation.user_id == user.id]
+    if params.q:
+        where.append(Calculation.name.ilike(f"%{escape_like(params.q)}%", escape="\\"))
+    if params.type:
+        where.append(Calculation.type == params.type)
+    if params.category:
+        where.append(Calculation.category == params.category)
+
+    order = {
+        "created_desc": (Calculation.created_at.desc(), Calculation.id),
+        "created_asc": (Calculation.created_at.asc(), Calculation.id),
+        "name_asc": (func.lower(Calculation.name).asc(), Calculation.created_at.desc(), Calculation.id),
+        "name_desc": (func.lower(Calculation.name).desc(), Calculation.created_at.desc(), Calculation.id),
+    }[params.sort]
+
+    db = request.ctx.db
+    total = await db.scalar(select(func.count()).select_from(Calculation).where(*where))
+    rows = list(
+        await db.scalars(
+            select(Calculation).where(*where).order_by(*order).offset(params.offset).limit(params.limit + 1)
+        )
     )
-    plan = await _plan_for(request, request.ctx.user)
-    return ok({"items": [serialize_calc(c, plan=plan) for c in rows]})
+    has_more = len(rows) > params.limit
+    rows = rows[: params.limit]
+    plan = await _plan_for(request, user)
+    return ok(
+        {
+            "items": [serialize_calc(c, plan=plan) for c in rows],
+            "total": total,
+            "next_cursor": encode_cursor(params.offset + params.limit) if has_more else None,
+        }
+    )
 
 
 @bp.get("/calculations/<calc_id:str>")
@@ -328,7 +406,7 @@ async def duplicate_calculation(request: Request, calc_id: str):
     return ok(serialize_calc(copy, plan=await _plan_for(request, request.ctx.user)), 201)
 
 
-# ---------- udostępnianie ----------
+# ---------- udostÄ™pnianie ----------
 
 
 @bp.post("/calculations/<calc_id:str>/share")
@@ -354,7 +432,7 @@ async def unshare(request: Request, calc_id: str):
 async def shared(request: Request, public_id: str):
     c = await request.ctx.db.scalar(select(Calculation).where(Calculation.public_id == public_id))
     if c is None:
-        raise ApiError("Nie znaleziono udostępnionego wyniku", 404)
+        raise ApiError("Nie znaleziono udostÄ™pnionego wyniku", 404)
     return ok(serialize_calc(c, public=True))
 
 
@@ -392,9 +470,9 @@ async def dashboard(request: Request):
         {
             "currency": request.ctx.user.currency,
             "count": len(items),
-            "total_value": round(total_cost, 2),
-            "total_hours": round(total_hours, 2),
-            "total_working_days": round(total_days, 2),
+            "total_value": rnd(total_cost, 2),
+            "total_hours": rnd(total_hours, 2),
+            "total_working_days": rnd(total_days, 2),
             "largest_expense": (
                 {"id": largest[0].id, "name": largest[0].name, "total_cost": largest[1]["total_cost"],
                  "hours": largest[1]["work"]["hours"]}
@@ -402,7 +480,7 @@ async def dashboard(request: Request):
                 else None
             ),
             "recurring": recurring,
-            "recurring_yearly_total": round(sum(x["yearly_cost"] for x in recurring), 2),
+            "recurring_yearly_total": rnd(sum(x["yearly_cost"] for x in recurring), 2),
             "recent": [serialize_calc(c, plan=plan) for c, _ in items[:5]],
         }
     )
