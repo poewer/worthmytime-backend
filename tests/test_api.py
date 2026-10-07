@@ -446,6 +446,56 @@ def test_budget_forecast_endpoint(client):
     assert res.json["days_left"] >= 1
 
 
+def test_history_pagination_search_filter_and_sort(client):
+    auth = _register(client, "history@b.pl")
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=auth)
+    names = ["Zeta", "alfa 50%", "Beta", "Gamma", "delta"]
+    for i, name in enumerate(names):
+        body = {"name": name, "purchase_price": 100 + i, "category": "FUN" if i % 2 == 0 else None}
+        if name == "Beta":
+            body.update(type="TCO", ownership_years=2)
+        client.post("/api/v1/calculations", json=body, headers=auth)
+
+    _, res = client.get("/api/v1/calculations", headers=auth)  # domyślnie: wszystko, od najnowszego
+    assert [x["name"] for x in res.json["items"]] == names[::-1]
+    assert res.json["total"] == 5 and res.json["next_cursor"] is None
+
+    # strony po 2 sztuki, kursor prowadzi do kolejnych bez powtórzeń
+    seen, cursor = [], None
+    for _ in range(5):
+        url = "/api/v1/calculations?limit=2" + (f"&cursor={cursor}" if cursor else "")
+        _, res = client.get(url, headers=auth)
+        seen += [x["name"] for x in res.json["items"]]
+        cursor = res.json["next_cursor"]
+        if not cursor:
+            break
+    assert seen == names[::-1]
+
+    _, res = client.get("/api/v1/calculations?sort=name_asc", headers=auth)
+    assert [x["name"] for x in res.json["items"]] == ["alfa 50%", "Beta", "delta", "Gamma", "Zeta"]
+    _, res = client.get("/api/v1/calculations?sort=created_asc&limit=2", headers=auth)
+    assert [x["name"] for x in res.json["items"]] == names[:2]
+
+    _, res = client.get("/api/v1/calculations?q=ALFA", headers=auth)  # bez rozróżniania wielkości liter
+    assert [x["name"] for x in res.json["items"]] == ["alfa 50%"] and res.json["total"] == 1
+    _, res = client.get("/api/v1/calculations?q=50%25", headers=auth)  # "%" jest dosłowny
+    assert res.json["total"] == 1
+    _, res = client.get("/api/v1/calculations?q=%25", headers=auth)
+    assert res.json["total"] == 1  # tylko nazwa ze znakiem %, a nie wszystko
+    _, res = client.get("/api/v1/calculations?type=TCO", headers=auth)
+    assert [x["name"] for x in res.json["items"]] == ["Beta"]
+    _, res = client.get("/api/v1/calculations?category=FUN", headers=auth)
+    assert res.json["total"] == 3
+
+    for bad in ("limit=0", "limit=999", "sort=x", "type=x", "category=x", "cursor=zly"):
+        assert client.get(f"/api/v1/calculations?{bad}", headers=auth)[1].status == 422
+
+    other = _register(client, "history2@b.pl")  # cudza historia nie przecieka
+    client.put("/api/v1/profile", json={"monthly_income": 10000}, headers=other)
+    _, res = client.get("/api/v1/calculations", headers=other)
+    assert res.json["total"] == 0 and res.json["items"] == []
+
+
 def test_other_user_cannot_read(client):
     _, r1 = client.post("/api/v1/auth/register", json={"email": "u1@b.pl", "password": "supersecret1"})
     _, r2 = client.post("/api/v1/auth/register", json={"email": "u2@b.pl", "password": "supersecret1"})
@@ -455,3 +505,5 @@ def test_other_user_cannot_read(client):
     _, c = client.post("/api/v1/calculations", json={"name": "x", "purchase_price": 1}, headers=h1)
     _, res = client.get(f"/api/v1/calculations/{c.json['id']}", headers=h2)
     assert res.status == 404
+
+

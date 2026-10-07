@@ -2,7 +2,7 @@ import secrets
 
 from sanic import Blueprint, Request
 from sanic.response import empty
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from . import calc
@@ -28,6 +28,7 @@ from .helpers import (
     user_profile,
 )
 from .models import Budget, BudgetLoan, Calculation, User
+from .pagination import encode_cursor, escape_like, parse_list_params
 from .planning import period_of, remaining_installments
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
 from .security import create_token, hash_password, verify_password
@@ -265,13 +266,42 @@ async def save_calculation(request: Request):
 @bp.get("/calculations")
 @login_required
 async def list_calculations(request: Request):
-    rows = await request.ctx.db.scalars(
-        select(Calculation)
-        .where(Calculation.user_id == request.ctx.user.id)
-        .order_by(Calculation.created_at.desc())
+    """Historia z paginacją: ?limit=&cursor=&q=&type=&category=&sort=created_desc|created_asc|name_asc|name_desc."""
+    params = parse_list_params({k: v[0] for k, v in request.args.items()})
+    user = request.ctx.user
+
+    where = [Calculation.user_id == user.id]
+    if params.q:
+        where.append(Calculation.name.ilike(f"%{escape_like(params.q)}%", escape="\\"))
+    if params.type:
+        where.append(Calculation.type == params.type)
+    if params.category:
+        where.append(Calculation.category == params.category)
+
+    order = {
+        "created_desc": (Calculation.created_at.desc(), Calculation.id),
+        "created_asc": (Calculation.created_at.asc(), Calculation.id),
+        "name_asc": (func.lower(Calculation.name).asc(), Calculation.created_at.desc(), Calculation.id),
+        "name_desc": (func.lower(Calculation.name).desc(), Calculation.created_at.desc(), Calculation.id),
+    }[params.sort]
+
+    db = request.ctx.db
+    total = await db.scalar(select(func.count()).select_from(Calculation).where(*where))
+    rows = list(
+        await db.scalars(
+            select(Calculation).where(*where).order_by(*order).offset(params.offset).limit(params.limit + 1)
+        )
     )
-    plan = await _plan_for(request, request.ctx.user)
-    return ok({"items": [serialize_calc(c, plan=plan) for c in rows]})
+    has_more = len(rows) > params.limit
+    rows = rows[: params.limit]
+    plan = await _plan_for(request, user)
+    return ok(
+        {
+            "items": [serialize_calc(c, plan=plan) for c in rows],
+            "total": total,
+            "next_cursor": encode_cursor(params.offset + params.limit) if has_more else None,
+        }
+    )
 
 
 @bp.get("/calculations/<calc_id:str>")
@@ -328,7 +358,7 @@ async def duplicate_calculation(request: Request, calc_id: str):
     return ok(serialize_calc(copy, plan=await _plan_for(request, request.ctx.user)), 201)
 
 
-# ---------- udostępnianie ----------
+# ---------- udostÄ™pnianie ----------
 
 
 @bp.post("/calculations/<calc_id:str>/share")
@@ -354,7 +384,7 @@ async def unshare(request: Request, calc_id: str):
 async def shared(request: Request, public_id: str):
     c = await request.ctx.db.scalar(select(Calculation).where(Calculation.public_id == public_id))
     if c is None:
-        raise ApiError("Nie znaleziono udostępnionego wyniku", 404)
+        raise ApiError("Nie znaleziono udostÄ™pnionego wyniku", 404)
     return ok(serialize_calc(c, public=True))
 
 
