@@ -2,6 +2,30 @@
 
 REST API (Sanic, Pydantic, SQLAlchemy async, Alembic).
 
+## Jak pracujemy
+
+Każda zmiana przechodzi ten sam cykl: **issue = nowy branch = pull request = merge = zamknięcie taska = usunięcie brancha**.
+
+```mermaid
+flowchart LR
+    A[Issue na tablicy] --> B[Nowy branch<br/>typ/numer-opis]
+    B --> C[Pull request<br/>z Closes #N do dev]
+    C --> D[CI: test + pr-policy]
+    D --> E[Merge squash do dev]
+    E --> F[Issue zamknięte,<br/>task w Done]
+    E --> G[Branch usunięty]
+    E --> H[Wydanie: dev -> stage -> main]
+```
+
+1. Zadanie zaczyna się od issue na [tablicy projektu](https://github.com/orgs/worthmytime/projects/1).
+2. Dla issue powstaje osobny branch `<typ>/<numer>-<opis>` (np. `feature/12-reset-hasla`), z `dev`, bez commitów prosto na `dev`, `stage` ani `main`.
+3. Zmiany trafiają w pull requeście, którego opis zawiera `Closes #<numer>`.
+4. PR do `dev` musi przejść CI (`test`, `pr-policy`). Gałęzie `dev`, `stage` i `main` są chronione.
+5. Po scaleniu (squash) do `dev` GitHub zamyka issue, przenosi zadanie do Done i usuwa branch.
+6. Wydanie: `dev` -> `stage` (testy przed produkcją) -> `main` (produkcja). Do `stage` i `main` scala tylko właściciel (`poewer`).
+
+Szczegóły i konwencje: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Uruchomienie lokalnie
 
 ```powershell
