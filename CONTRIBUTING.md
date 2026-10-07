@@ -39,6 +39,7 @@ Droga zmiany: `feature/...` -> `dev` -> `stage` -> `main`.
 - Wydanie to osobne pull requesty **`dev` -> `stage`** i **`stage` -> `main`**, scalane przyciskiem **Create a merge commit** (nie squash, żeby gałęzie się nie rozjechały). Otwiera je i scala właściciel.
 - Do `stage` wchodzi wyłącznie `dev`, do `main` wyłącznie `stage`. Pilna poprawka produkcji też idzie tą drogą (nazwij ją `fix/...`).
 - Wszystkie trzy gałęzie są chronione: zmiany tylko przez PR, wymagane kontrole, bez force-pusha i bez usuwania.
+- **`dev` i `stage` nigdy nie są w tyle za `main`** (mogą być przed). Po każdym wydaniu na `main` właściciel synchronizuje wstecz PR-ami `main` -> `stage` i `main` -> `dev` (merge commit), bo wydanie merge commitem dodaje commit tylko na `main`.
 
 ## Zasady
 
