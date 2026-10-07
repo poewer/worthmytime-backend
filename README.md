@@ -86,3 +86,12 @@ Zaokrąglamy w jednym miejscu (`app/money.py`): **ROUND_HALF_UP** na zapisie dzi
 ## Sesja w cookie i CSRF
 
 Logowanie i rejestracja ustawiają cookie `wmt_session` (JWT, HttpOnly) oraz `wmt_csrf` (odczytywalne dla JS). Żądania zmieniające dane (`POST/PUT/DELETE`) uwierzytelnione cookie muszą odesłać wartość `wmt_csrf` w nagłówku `X-CSRF-Token` (inaczej 403). Nagłówek `Authorization: Bearer` nadal działa i nie wymaga CSRF (klienci API). `POST /auth/logout` czyści cookie, a `POST /auth/session` wymienia ważny token Bearer na cookie (migracja z localStorage). CORS z `credentials` działa tylko dla domen z `CORS_ORIGINS`, nigdy dla `*`; przeglądarka z frontendu musi wysyłać żądania z `credentials: "include"`.
+
+## Dokumentacja API (OpenAPI i Swagger)
+
+Po uruchomieniu serwera:
+
+- **Swagger UI:** `http://localhost:8001/api/v1/docs` (interaktywna dokumentacja z przyciskiem *Authorize* dla tokenu Bearer; skrypty UI ładują się z CDN, więc potrzebny jest internet w przeglądarce)
+- **Specyfikacja OpenAPI 3.1 (JSON):** `http://localhost:8001/api/v1/openapi.json` (np. do importu w Postmanie lub generowania klienta)
+
+Schematy żądań powstają z modeli Pydantic (`app/schemas.py`), a opisy operacji, odpowiedzi i kody błędów są w tabeli `OPERATIONS` w `app/openapi.py`. **Dodajesz lub zmieniasz endpoint? Dopisz go do tej tabeli**: test `tests/test_openapi.py` sprawdza, że każdy zarejestrowany endpoint jest opisany (i odwrotnie), a specyfikacja przechodzi walidację OpenAPI 3.1.
