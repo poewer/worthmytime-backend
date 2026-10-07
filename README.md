@@ -95,3 +95,15 @@ Po uruchomieniu serwera:
 - **Specyfikacja OpenAPI 3.1 (JSON):** `http://localhost:8001/api/v1/openapi.json` (np. do importu w Postmanie lub generowania klienta)
 
 Schematy żądań powstają z modeli Pydantic (`app/schemas.py`), a opisy operacji, odpowiedzi i kody błędów są w tabeli `OPERATIONS` w `app/openapi.py`. **Dodajesz lub zmieniasz endpoint? Dopisz go do tej tabeli**: test `tests/test_openapi.py` sprawdza, że każdy zarejestrowany endpoint jest opisany (i odwrotnie), a specyfikacja przechodzi walidację OpenAPI 3.1.
+
+## Obrazy Docker (GHCR)
+
+Obraz buduje workflow `Publish Docker image to GHCR` (po zielonych testach), bez wdrożenia na serwer:
+
+| Gałąź | Środowisko | Tag obrazu |
+|---|---|---|
+| `main` | produkcja | `<SHA commita>` |
+| `stage` | testy przed produkcją | `stage-<SHA commita>` |
+
+Tagi są zawsze po SHA (nigdy `latest`), więc wiadomo dokładnie, jaki kod działa.
+Ręczne uruchomienie (`workflow_dispatch`) zbuduje wybraną gałąź z tagiem `<gałąź>-<SHA>`.
