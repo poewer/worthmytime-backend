@@ -14,6 +14,7 @@ from .models import Base
 from .ratelimit import Limits, RateLimiter
 from .routes import bp
 from .routes_account import bp as account_bp
+from .routes_alerts import bp as alerts_bp
 from .routes_planning import bp as planning_bp
 
 log = setup_logging()
@@ -122,6 +123,7 @@ def create_app(database_url: str | None = None, create_schema: bool = False, lim
     app.blueprint(bp)
     app.blueprint(planning_bp)
     app.blueprint(account_bp)
+    app.blueprint(alerts_bp)
     return app
 
 
