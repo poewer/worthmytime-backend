@@ -1,7 +1,7 @@
 import secrets
 
 from sanic import Blueprint, Request
-from sanic.response import empty
+from sanic.response import empty, html
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
@@ -30,6 +30,7 @@ from .helpers import (
 )
 from .models import Budget, BudgetLoan, Calculation, User
 from .money import rnd
+from .openapi import SWAGGER_UI_HTML, build_spec
 from .pagination import encode_cursor, escape_like, parse_list_params
 from .planning import period_of, remaining_installments
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
@@ -43,6 +44,17 @@ bp = Blueprint("api", url_prefix="/api/v1")
 async def preflight(request: Request, path: str):
     # nagłówki CORS dokłada middleware on_response
     return empty(204)
+
+
+@bp.get("/openapi.json")
+async def openapi_json(request: Request):
+    """Specyfikacja OpenAPI 3.1 wygenerowana z modeli Pydantic i tabeli operacji w `app/openapi.py`."""
+    return ok(build_spec())
+
+
+@bp.get("/docs")
+async def swagger_ui(request: Request):
+    return html(SWAGGER_UI_HTML.replace("%(spec_url)s", "/api/v1/openapi.json"))
 
 
 @bp.get("/health")
