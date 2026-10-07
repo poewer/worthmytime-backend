@@ -18,6 +18,7 @@ from .planning import month_bounds, period_of, remaining_installments, totals_by
 from .recurring import due_dates
 from .schemas import CATEGORIES, BudgetIn, CalculationIn, CostIn, LoanIn, ProfileIn
 from .security import decode_token
+from .session import SAFE_METHODS, csrf_valid, session_token
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -51,9 +52,13 @@ def ok(data, status: int = 200):
 
 async def current_user(request: Request) -> User | None:
     header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None
-    user_id = decode_token(header[7:])
+    if header.startswith("Bearer "):
+        user_id = decode_token(header[7:])  # nagłówek nie jest wysyłany automatycznie, więc bez CSRF
+    else:
+        cookie = session_token(request)
+        user_id = decode_token(cookie) if cookie else None
+        if user_id and request.method not in SAFE_METHODS and not csrf_valid(request):
+            raise ApiError("Nieprawidłowy token CSRF", 403)
     return await request.ctx.db.get(User, user_id) if user_id else None
 
 

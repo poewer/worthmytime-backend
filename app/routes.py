@@ -33,7 +33,8 @@ from .money import rnd
 from .pagination import encode_cursor, escape_like, parse_list_params
 from .planning import period_of, remaining_installments
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
-from .security import create_token, hash_password, verify_password
+from .security import create_token, decode_token, hash_password, verify_password
+from .session import clear_session_cookies, set_session_cookies
 
 bp = Blueprint("api", url_prefix="/api/v1")
 
@@ -74,7 +75,7 @@ async def register(request: Request):
     except IntegrityError:
         await db.rollback()
         raise ApiError("Konto z tym adresem e-mail już istnieje", 409)
-    return ok({"token": create_token(user.id), "profile": user_profile(user)}, 201)
+    return set_session_cookies(ok({"token": create_token(user.id), "profile": user_profile(user)}, 201), user.id)
 
 
 @bp.post("/auth/login")
@@ -92,7 +93,24 @@ async def login(request: Request):
         limiter.login_failed(ip, data.email)
         raise ApiError("Nieprawidłowy e-mail lub hasło", 401)
     limiter.login_succeeded(ip, data.email)
-    return ok({"token": create_token(user.id), "profile": user_profile(user)})
+    return set_session_cookies(ok({"token": create_token(user.id), "profile": user_profile(user)}), user.id)
+
+
+@bp.post("/auth/logout")
+async def logout(request: Request):
+    """Czyści cookie sesji. Nie wymaga uwierzytelnienia, więc zawsze się udaje (wylogowanie jest idempotentne)."""
+    return clear_session_cookies(ok({"logged_out": True}))
+
+
+@bp.post("/auth/session")
+async def exchange_session(request: Request):
+    """Wymienia ważny token Bearer na cookie sesji (migracja zalogowanych z localStorage)."""
+    header = request.headers.get("Authorization", "")
+    user_id = decode_token(header[7:]) if header.startswith("Bearer ") else None
+    user = await request.ctx.db.get(User, user_id) if user_id else None
+    if user is None:
+        raise ApiError("Wymagane uwierzytelnienie", 401)
+    return set_session_cookies(ok({"profile": user_profile(user)}), user.id)
 
 
 @bp.get("/auth/me")
