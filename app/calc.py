@@ -8,6 +8,7 @@ Konwencje (WorthMyTime_Budget_Model.md, sekcje 3, 5, 21):
 
 from dataclasses import dataclass
 
+from .money import rnd
 from .schemas import CalcType, CalculationIn, Frequency
 
 WEEKS_PER_YEAR = 52
@@ -99,28 +100,28 @@ def work_time(money: float, rate: WorkRate) -> dict:
     weeks = days / rate.days_per_week
     years = days / rate.working_days_per_year
     months = hours / rate.hours_per_month
-    total_minutes = round(hours * 60)
+    total_minutes = rnd(hours * 60)
     sign = -1 if total_minutes < 0 else 1
     h, m = divmod(abs(total_minutes), 60)
     return {
-        "hours": round(hours, 2),
+        "hours": rnd(hours, 2),
         "hours_part": sign * h,
         "minutes_part": m,
-        "working_days": round(days, 2),
-        "working_weeks": round(weeks, 2),
-        "working_months": round(months, 2),
-        "working_years": round(years, 2),
+        "working_days": rnd(days, 2),
+        "working_weeks": rnd(weeks, 2),
+        "working_months": rnd(months, 2),
+        "working_years": rnd(years, 2),
         # jaką część miesięcznej wypłaty pochłania wydatek (100 = cała wypłata); zawsze od dochodu netto
-        "income_percent": round(money / rate.monthly_income * 100, 1) if rate.monthly_income > 0 else None,
+        "income_percent": rnd(money / rate.monthly_income * 100, 1) if rate.monthly_income > 0 else None,
     }
 
 
 def _life_cost(total: float, years: float) -> dict:
     return {
         "years": years,
-        "per_day": round(total / (years * DAYS_PER_YEAR), 2),
-        "per_week": round(total / (years * DAYS_PER_YEAR / 7), 2),
-        "per_month": round(total / (years * 12), 2),
+        "per_day": rnd(total / (years * DAYS_PER_YEAR), 2),
+        "per_week": rnd(total / (years * DAYS_PER_YEAR / 7), 2),
+        "per_month": rnd(total / (years * 12), 2),
     }
 
 
@@ -137,7 +138,7 @@ def compute(calc: CalculationIn, rate: WorkRate) -> dict:
             lines.append(
                 {
                     "name": c.name,
-                    "amount": round(cost_over_years(c.amount, c.frequency, years or 1), 2),
+                    "amount": rnd(cost_over_years(c.amount, c.frequency, years or 1), 2),
                     "frequency": c.frequency.value,
                 }
             )
@@ -148,21 +149,21 @@ def compute(calc: CalculationIn, rate: WorkRate) -> dict:
     if calc.resale_value:
         lines.append({"name": "Resale", "amount": -calc.resale_value})
 
-    total = round(sum(line["amount"] for line in lines), 2)
+    total = rnd(sum(line["amount"] for line in lines), 2)
     per_use = None
     if calc.expected_uses and total > 0:
         per_use_cost = total / calc.expected_uses
         per_use = {
             "uses": calc.expected_uses,
-            "cost": round(per_use_cost, 2),
-            "work_minutes": round(per_use_cost / rate.hourly_rate * 60, 1),
+            "cost": rnd(per_use_cost, 2),
+            "work_minutes": rnd(per_use_cost / rate.hourly_rate * 60, 1),
         }
     result = {
         "name": calc.name,
         "type": calc.type.value,
         "total_cost": total,
         "breakdown": lines,
-        "hourly_rate": round(rate.hourly_rate, 2),
+        "hourly_rate": rnd(rate.hourly_rate, 2),
         "work": work_time(total, rate),
         "life_cost": _life_cost(total, years) if years else None,
         "per_use": per_use,
@@ -179,8 +180,8 @@ def _compute_recurring(calc: CalculationIn, rate: WorkRate) -> dict:
     one_time = sum(c.amount for c in calc.costs if c.frequency == Frequency.ONE_TIME)
     horizons = []
     for label, years in RECURRING_HORIZONS:
-        cost = round(per_year * years + one_time, 2)
-        horizons.append({"label": label, "years": round(years, 4), "cost": cost, "work": work_time(cost, rate)})
+        cost = rnd(per_year * years + one_time, 2)
+        horizons.append({"label": label, "years": rnd(years, 4), "cost": cost, "work": work_time(cost, rate)})
     month, ten = horizons[0], horizons[-1]
     # nagłówek wyniku = koszt jednego miesiąca (skala zrozumiała dla użytkownika);
     # dłuższe horyzonty (rok, 5 i 10 lat) pokazują, jak to narasta
@@ -191,7 +192,7 @@ def _compute_recurring(calc: CalculationIn, rate: WorkRate) -> dict:
         "breakdown": [
             {"name": c.name, "amount": c.amount, "frequency": c.frequency.value} for c in calc.costs
         ],
-        "hourly_rate": round(rate.hourly_rate, 2),
+        "hourly_rate": rnd(rate.hourly_rate, 2),
         "work": month["work"],
         "horizons": horizons,
         "summary": {"years": 10, "working_days": ten["work"]["working_days"]},
@@ -200,13 +201,13 @@ def _compute_recurring(calc: CalculationIn, rate: WorkRate) -> dict:
 
 
 def compare(a: dict, b: dict, rate: WorkRate) -> dict:
-    diff_hours = round(a["work"]["hours"] - b["work"]["hours"], 2)
+    diff_hours = rnd(a["work"]["hours"] - b["work"]["hours"], 2)
     return {
         "a": a,
         "b": b,
         "difference": {
-            "cost": round(a["total_cost"] - b["total_cost"], 2),
+            "cost": rnd(a["total_cost"] - b["total_cost"], 2),
             "hours": diff_hours,
-            "working_days": round(diff_hours / rate.hours_per_day, 2),
+            "working_days": rnd(diff_hours / rate.hours_per_day, 2),
         },
     }

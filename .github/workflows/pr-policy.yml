@@ -2,6 +2,7 @@ name: PR policy
 
 # Egzekwuje metodologię: issue = branch = pull request = merge = zamknięcie zadania = usunięcie brancha.
 # Sprawdza, że branch ma nazwę <typ>/<numer-issue>-<opis>, a opis PR zamyka dokładnie to issue.
+# PR wydaniowe: do stage tylko z dev, do main tylko ze stage (bez wymogu issue).
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
@@ -21,6 +22,17 @@ jobs:
             const pr = context.payload.pull_request;
             const branch = pr.head.ref;
             const fail = (msg) => core.setFailed(msg);
+
+            // PR wydaniowe: do stage wchodzi tylko dev, do main tylko stage (bez własnego issue)
+            const base = pr.base.ref;
+            if (base === "stage" || base === "main") {
+              const expected = base === "stage" ? "dev" : "stage";
+              if (branch !== expected) {
+                return fail(`Do "${base}" można scalać tylko z "${expected}" (wydanie: dev -> stage -> main), a ten PR jest z "${branch}".`);
+              }
+              core.info(`OK: PR wydaniowy ${branch} -> ${base}`);
+              return;
+            }
 
             const m = branch.match(/^(feature|fix|chore|docs|refactor|test)\/(\d+)-[a-z0-9]+(?:-[a-z0-9]+)*$/);
             if (!m) {
