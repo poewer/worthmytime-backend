@@ -29,6 +29,7 @@ from .helpers import (
     user_profile,
 )
 from .models import Budget, BudgetLoan, Calculation, User
+from .money import rnd
 from .pagination import encode_cursor, escape_like, parse_list_params
 from .planning import period_of, remaining_installments
 from .schemas import CATEGORIES, BudgetIn, CalculateIn, CalculationIn, CompareIn, Credentials, ProfileIn
@@ -439,9 +440,9 @@ async def dashboard(request: Request):
         {
             "currency": request.ctx.user.currency,
             "count": len(items),
-            "total_value": round(total_cost, 2),
-            "total_hours": round(total_hours, 2),
-            "total_working_days": round(total_days, 2),
+            "total_value": rnd(total_cost, 2),
+            "total_hours": rnd(total_hours, 2),
+            "total_working_days": rnd(total_days, 2),
             "largest_expense": (
                 {"id": largest[0].id, "name": largest[0].name, "total_cost": largest[1]["total_cost"],
                  "hours": largest[1]["work"]["hours"]}
@@ -449,7 +450,7 @@ async def dashboard(request: Request):
                 else None
             ),
             "recurring": recurring,
-            "recurring_yearly_total": round(sum(x["yearly_cost"] for x in recurring), 2),
+            "recurring_yearly_total": rnd(sum(x["yearly_cost"] for x in recurring), 2),
             "recent": [serialize_calc(c, plan=plan) for c, _ in items[:5]],
         }
     )

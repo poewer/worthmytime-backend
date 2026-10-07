@@ -19,6 +19,7 @@ from .helpers import (
     today,
 )
 from .models import BudgetLoan, Expense, RecurringExpense, SavingsGoal, User, WishlistItem
+from .money import rnd
 from .planning import (
     goal_view,
     last_periods,
@@ -104,13 +105,13 @@ async def list_expenses(request: Request):
     )
     # opłacone raty są na liście, ale nie wchodzą do sum (rata jest już zobowiązaniem w Potrzebach)
     totals = totals_by_category((e.category, e.amount) for e in rows if e.source_type != "LOAN")
-    loan_payments = round(sum(e.amount for e in rows if e.source_type == "LOAN"), 2)
+    loan_payments = rnd(sum(e.amount for e in rows if e.source_type == "LOAN"), 2)
     return ok(
         {
             "month": period,
             "items": [_expense(e) for e in rows],
             "totals": totals,
-            "total": round(sum(totals.values()), 2),
+            "total": rnd(sum(totals.values()), 2),
             "loan_payments": loan_payments,
         }
     )
@@ -184,7 +185,7 @@ async def list_recurring(request: Request):
     )
     items = [_recurring(t) for t in rows]
     active = [t for t in items if t["active"]]
-    return ok({"items": items, "monthly_total": round(sum(t["amount"] for t in active), 2)})
+    return ok({"items": items, "monthly_total": rnd(sum(t["amount"] for t in active), 2)})
 
 
 @bp.post("/recurring-expenses")
@@ -355,7 +356,7 @@ def _goal(g: SavingsGoal, hourly_rate: float | None, capacity: dict[str, float] 
     """capacity: wolne środki kategorii pomniejszone o wpłaty innych celów z tej samej kategorii."""
     max_monthly = None
     if g.category and capacity is not None and g.category in capacity:
-        max_monthly = round(max(capacity[g.category], 0.0), 2)
+        max_monthly = rnd(max(capacity[g.category], 0.0), 2)
     # bez własnej wpłaty zakładamy maksimum, na jakie pozwala budżet kategorii
     contribution = g.monthly_contribution if g.monthly_contribution is not None else max_monthly
     return {
@@ -473,7 +474,7 @@ async def deposit(request: Request, goal_id: str):
     g = await _own(request, SavingsGoal, goal_id, user, "celu")
     if g.saved_amount + data.amount < 0:
         raise ApiError("Nie można wypłacić więcej, niż odłożono", 422)
-    g.saved_amount = round(g.saved_amount + data.amount, 2)
+    g.saved_amount = rnd(g.saved_amount + data.amount, 2)
     _sync_completion(g)
     await request.ctx.db.commit()
     return ok(await _single_goal(request, user, g))
