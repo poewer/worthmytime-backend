@@ -73,3 +73,8 @@ Kontener wykonuje `alembic upgrade head` przy każdym starcie.
 | `PORT` | domyślnie 8001 (w kontenerze 8000) |
 
 Pełny stack (db + api + web): `docker compose up --build` w katalogu nadrzędnym (wymaga `JWT_SECRET`).
+
+## Kopie zapasowe i monitoring
+
+Skrypty kopii zapasowej, test odtworzenia i monitoring `/health`: [ops/README.md](ops/README.md).
+
