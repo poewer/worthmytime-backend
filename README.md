@@ -17,7 +17,7 @@ flowchart LR
     E --> H[Wydanie: dev -> stage -> main]
 ```
 
-1. Zadanie zaczyna się od issue na [tablicy projektu](https://github.com/users/poewer/projects/6).
+1. Zadanie zaczyna się od issue na [tablicy projektu](https://github.com/orgs/worthmytime/projects/1).
 2. Dla issue powstaje osobny branch `<typ>/<numer>-<opis>` (np. `feature/12-reset-hasla`), z `dev`, bez commitów prosto na `dev`, `stage` ani `main`.
 3. Zmiany trafiają w pull requeście, którego opis zawiera `Closes #<numer>`.
 4. PR do `dev` musi przejść CI (`test`, `pr-policy`). Gałęzie `dev`, `stage` i `main` są chronione.
