@@ -139,6 +139,19 @@ class ExpenseIn(BaseModel):
     spent_on: date | None = None  # domyślnie dziś
 
 
+class ExpenseImportItem(BaseModel):
+    category: Category
+    amount: MoneyIn = Field(gt=0, le=1_000_000_000)
+    note: str | None = Field(default=None, max_length=200)
+    spent_on: date
+    # stabilny klucz pozycji (np. skrót z daty, kwoty i tytułu w wyciągu): ten sam klucz nie utworzy drugiego wpisu
+    key: str = Field(min_length=8, max_length=128)
+
+
+class ExpenseImportIn(BaseModel):
+    items: list[ExpenseImportItem] = Field(min_length=1, max_length=500)
+
+
 class RecurringIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     category: Category

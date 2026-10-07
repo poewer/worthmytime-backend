@@ -1,9 +1,11 @@
 """Endpointy planowania: rejestr wydatków, lista życzeń i cele oszczędnościowe (wymagają konta)."""
 
+import hashlib
 from datetime import UTC, datetime
 
 from sanic import Blueprint, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from . import calc
 from .errors import ApiError
@@ -31,7 +33,17 @@ from .planning import (
     wish_stats,
     wish_view,
 )
-from .schemas import Category, DecisionIn, DepositIn, ExpenseIn, GoalIn, LoanPaymentIn, RecurringIn, WishIn
+from .schemas import (
+    Category,
+    DecisionIn,
+    DepositIn,
+    ExpenseImportIn,
+    ExpenseIn,
+    GoalIn,
+    LoanPaymentIn,
+    RecurringIn,
+    WishIn,
+)
 
 bp = Blueprint("planning", url_prefix="/api/v1")
 
@@ -131,6 +143,50 @@ async def add_expense(request: Request):
     request.ctx.db.add(e)
     await request.ctx.db.commit()
     return ok(_expense(e), 201)
+
+
+@bp.post("/expenses/import")
+@login_required
+async def import_expenses(request: Request):
+    """Dopisuje wiele wydatków naraz (np. z wyciągu bankowego).
+
+    Idempotentne: ten sam `key` nie tworzy drugiego wpisu.
+    """
+    data = parse(ExpenseImportIn, request)
+    user, db = request.ctx.user, request.ctx.db
+    # klucz łączymy z użytkownikiem, bo unikalność źródła w bazie jest globalna
+    ids = {item.key: hashlib.sha256(f"{user.id}:{item.key}".encode()).hexdigest()[:32] for item in data.items}
+    existing = set(
+        await db.scalars(
+            select(Expense.source_id).where(
+                Expense.user_id == user.id, Expense.source_type == "IMPORT", Expense.source_id.in_(set(ids.values()))
+            )
+        )
+    )
+    seen, created = set(existing), 0
+    for item in data.items:
+        source_id = ids[item.key]
+        if source_id in seen:
+            continue
+        seen.add(source_id)
+        db.add(
+            Expense(
+                user_id=user.id,
+                category=item.category.value,
+                amount=item.amount,
+                note=item.note,
+                spent_on=item.spent_on,
+                source_type="IMPORT",
+                source_id=source_id,
+            )
+        )
+        created += 1
+    try:
+        await db.commit()
+    except IntegrityError:  # równoległy import tego samego wyciągu
+        await db.rollback()
+        raise ApiError("Ten import jest już wykonywany, spróbuj ponownie", 409)
+    return ok({"created": created, "skipped": len(data.items) - created}, 201 if created else 200)
 
 
 @bp.delete("/expenses/<expense_id:str>")

@@ -196,7 +196,7 @@ RESPONSE_SCHEMAS: dict[str, dict] = {
             "amount": _num,
             "note": {"type": ["string", "null"]},
             "spent_on": {"type": "string", "format": "date"},
-            "source_type": {"enum": ["RECURRING", "LOAN", None], "description": "pochodzenie wpisu; brak = ręczny"},
+            "source_type": {"enum": ["RECURRING", "LOAN", "IMPORT", None], "description": "pochodzenie wpisu; brak = ręczny"},
             "source_id": {"type": ["string", "null"]},
         },
         ["id", "category", "amount", "spent_on"],
@@ -204,6 +204,7 @@ RESPONSE_SCHEMAS: dict[str, dict] = {
     "ExpenseList": _list_of(
         "Expense", month={"type": "string"}, totals=_obj({}), total=_num, loan_payments={"type": "number"}
     ),
+    "ImportResult": _obj({"created": {"type": "integer"}, "skipped": {"type": "integer"}}, ["created", "skipped"]),
     "ExpenseSummary": _obj({"months": {"type": "array", "items": _obj({"month": _str, "totals": _obj({}), "total": _num})}}),
     "RecurringExpense": _obj(
         {
@@ -398,6 +399,10 @@ OPERATIONS: list[dict] = [
         description="Przy odczycie dopisują się brakujące wpisy ze stałych wydatków."),
     _op("POST", "/expenses", "add_expense", "Wydatki", "Dopisanie wydatku", (201, "Wpis", "Expense"), body=s.ExpenseIn),
     _op("DELETE", "/expenses/{expense_id}", "delete_expense", "Wydatki", "Usunięcie wpisu", (200, "Usunięto", "Deleted")),
+    _op("POST", "/expenses/import", "import_expenses", "Wydatki", "Import wielu wydatków naraz (np. z wyciągu bankowego)",
+        (201, "Wpisy dopisane (200, gdy wszystkie już istniały)", "ImportResult"), body=s.ExpenseImportIn,
+        description="Idempotentne: pozycja z tym samym `key` nie tworzy drugiego wpisu (`skipped`). Do 500 pozycji na żądanie, "
+        "wpisy mają `source_type=IMPORT`."),
     _op("GET", "/expenses/summary", "expenses_summary", "Wydatki", "Trend wydatków w ostatnich miesiącach",
         (200, "Podsumowanie miesięcy", "ExpenseSummary"),
         query=[_q("months", "Liczba miesięcy (1-24, domyślnie 6)", {"type": "integer", "minimum": 1, "maximum": 24})]),
