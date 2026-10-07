@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     port: int = 8001
     debug: bool = False
     log_level: str = "INFO"
+    rate_limit_enabled: bool = True
+    rate_limit_api_per_minute: int = 300
+    rate_limit_auth_per_minute: int = 20
+    login_max_failures: int = 5
+    login_lock_seconds: int = 900
+    trust_proxy: bool = False  # True tylko za zaufanym reverse proxy (adres z X-Forwarded-For)
 
     @property
     def cors_origin_list(self) -> list[str]:

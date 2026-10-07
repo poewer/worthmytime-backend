@@ -10,6 +10,7 @@ from .budget import analyze
 from .errors import ApiError
 from .helpers import (
     apply_input,
+    client_ip,
     current_user,
     load_ledger,
     load_loans,
@@ -54,8 +55,15 @@ async def health(request: Request):
 # ---------- auth ----------
 
 
+def _check_auth_rate(request: Request) -> None:
+    wait = request.app.ctx.limiter.check_auth(client_ip(request))
+    if wait:
+        raise ApiError("Zbyt wiele prób, spróbuj ponownie za chwilę", 429, headers={"Retry-After": str(wait)})
+
+
 @bp.post("/auth/register")
 async def register(request: Request):
+    _check_auth_rate(request)
     data = parse(Credentials, request)
     db = request.ctx.db
     user = User(email=data.email.lower(), password_hash=hash_password(data.password))
@@ -70,10 +78,19 @@ async def register(request: Request):
 
 @bp.post("/auth/login")
 async def login(request: Request):
+    _check_auth_rate(request)
     data = parse(Credentials, request)
+    limiter, ip = request.app.ctx.limiter, client_ip(request)
+    wait = limiter.login_blocked(ip, data.email)
+    if wait:
+        raise ApiError(
+            "Zbyt wiele nieudanych prób logowania, spróbuj ponownie później", 429, headers={"Retry-After": str(wait)}
+        )
     user = await request.ctx.db.scalar(select(User).where(User.email == data.email.lower()))
     if user is None or not verify_password(data.password, user.password_hash):
+        limiter.login_failed(ip, data.email)
         raise ApiError("Nieprawidłowy e-mail lub hasło", 401)
+    limiter.login_succeeded(ip, data.email)
     return ok({"token": create_token(user.id), "profile": user_profile(user)})
 
 
