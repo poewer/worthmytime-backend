@@ -205,6 +205,8 @@ def test_loans_are_saved_with_budget_and_counted_in_needs(client):
 
 def _register(client, email):
     _, res = client.post("/api/v1/auth/register", json={"email": email, "password": "supersecret1"})
+    # serwer ustawia cookie sesji; testy identyfikują się nagłówkiem, więc czyścimy słoik ciasteczek klienta
+    client._session.cookies.clear()
     return {"Authorization": f"Bearer {res.json['token']}"}
 
 
