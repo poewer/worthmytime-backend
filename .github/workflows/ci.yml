@@ -40,3 +40,47 @@ jobs:
 
       - name: Tests (pytest)
         run: uv run pytest -q
+
+  # Build obrazu, a po nim test dymny kontenera (migracje na PostgreSQL + /health).
+  # publish.yml ma `needs: ci`, więc obraz, który się nie buduje lub nie startuje, nie trafia do rejestru.
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: smoke
+          POSTGRES_PASSWORD: smoke
+          POSTGRES_DB: smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U smoke -d smoke"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build obrazu
+        run: docker build -t wmt-api:smoke .
+
+      - name: Test obrazu (start, migracje, /health)
+        run: |
+          docker run -d --name wmt-api --network host \
+            -e DATABASE_URL=postgresql+asyncpg://smoke:smoke@localhost:5432/smoke \
+            -e JWT_SECRET=smoke-test-secret-smoke-test-secret-0123 \
+            -e CORS_ORIGINS=http://localhost:3000 \
+            wmt-api:smoke
+          # curl -f kończy się błędem także przy 503 (baza niedostępna)
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/api/v1/health; then echo; echo "Obraz działa"; exit 0; fi
+            sleep 2
+          done
+          echo "Obraz nie odpowiedział na /health" >&2
+          exit 1
+
+      - name: Logi kontenera po błędzie
+        if: failure()
+        run: docker logs wmt-api || true
